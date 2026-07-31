@@ -1,5 +1,6 @@
 #!/bin/bash
 set -euo pipefail
+trap 'printf "FAIL routing wrapper QA at line %s\n" "$LINENO" >&2' ERR
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 SKILL_DIR=$(cd "$SCRIPT_DIR/../.." && pwd)
