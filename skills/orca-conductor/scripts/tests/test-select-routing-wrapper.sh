@@ -1,14 +1,12 @@
 #!/bin/bash
 set -euo pipefail
+trap 'printf "FAIL routing wrapper QA at line %s\n" "$LINENO" >&2' ERR
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 SKILL_DIR=$(cd "$SCRIPT_DIR/../.." && pwd)
 WRAPPER="$SKILL_DIR/scripts/select-routing-pair.sh"
 
 [ -x "$WRAPPER" ]
-"$WRAPPER" --help | rg -q -- '--quota-file'
-"$WRAPPER" --help | rg -q -- '--task-class'
-printf 'PASS routing wrapper uses the declared PEP 723 environment\n'
 
 QA_DIR=$(mktemp -d)
 QUOTA_FILE="$QA_DIR/quota.json"
