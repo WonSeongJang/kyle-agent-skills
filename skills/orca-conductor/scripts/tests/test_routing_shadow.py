@@ -8,6 +8,7 @@ from types import ModuleType
 
 SCRIPT = Path(__file__).parents[1] / "routing_shadow.py"
 CONFIG = Path(__file__).parents[2] / "references" / "routing-providers.json"
+sys.path.insert(0, str(SCRIPT.parent))
 
 
 def load_shadow() -> ModuleType:

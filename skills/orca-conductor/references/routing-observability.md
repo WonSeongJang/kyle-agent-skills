@@ -65,7 +65,9 @@
 
 `qualityPrior`와 `observedQuality`는 당시 선택기의 입력 스냅샷이지 정답 라벨이 아니다.
 
-`routing_selected_auto.payload.shadow`는 2026-07-31부터 실제 발령을 바꾸지 않는 비교 자료다. `task_class`, 선택된 작업자·검수자의 `harness`, 기존 점수, `taskClassPrior` 합계, 그림자 점수를 기록한다. stdout의 실제 선택과 shadow 선택이 달라도 발령은 stdout을 따른다. `taskClassPrior`는 수동 가설이므로 `observedQuality`로 해석하거나 운영 성과처럼 보고하지 않는다.
+`routing_selected_auto.payload.shadow`는 2026-07-31부터 별도 성격 점수를 비교하는 자료다. `task_class`, 선택된 작업자·검수자의 `harness`, 기존 점수, `taskClassPrior` 합계, 그림자 점수를 기록한다. `taskClassPrior`는 수동 가설이므로 `observedQuality`로 해석하거나 운영 성과처럼 보고하지 않는다.
+
+`--exploration-share-percent`를 명시적으로 켠 실행은 `payload.exploration`도 기록한다. 여기에는 원래 조합, 실제 선택 조합, 하네스, 안전 판정, 0~99 칸과 이유가 들어간다. 기본 비율은 0이며 자세한 안전 범위는 `routing-exploration.md`를 따른다. shadow는 비교 자료이고, 실제 발령은 stdout의 최종 조합을 따른다.
 
 ### `execution_finished`
 

@@ -25,12 +25,24 @@ scripts/validate.sh     공통 검증 진입점
 라이브 `main`에서 직접 개발하지 않는다. 작업마다 별도 worktree를 만든다.
 
 ```bash
-git -C /Users/fw_m1/Dev/kyle-agent-skills worktree add \
-  /Users/fw_m1/Dev/.worktrees/kyle-agent-skills/<작업이름> \
+git worktree add \
+  ../.worktrees/kyle-agent-skills/<작업이름> \
   -b agent/<작업이름> main
 ```
 
 worktree에서 수정과 검증을 끝낸 뒤 커밋·push·PR 검수를 거쳐 `main`에 병합한다. 라이브 링크는 `main`만 바라보므로 작업 중인 변경은 실제 세션에 적용되지 않는다.
+
+새 세션은 경로를 외우지 않고 아래 순서로 작업 위치를 다시 찾는다. `main`에서 시작해 작업 브랜치를 모르면, 첫 명령 결과의 `agent/*` 브랜치들을 후보로 삼고 각 후보 worktree의 `docs/TODO.md`를 읽어 목적이 맞는 것을 고른다. TODO를 먼저 알아야 worktree를 찾는 구조가 아니다.
+
+```bash
+git worktree list --porcelain
+cd <위 목록의 agent 브랜치 후보 중 docs/TODO.md 목적이 맞는 경로>
+git rev-parse --show-toplevel
+git branch --show-current
+sed -n '1,240p' docs/TODO.md
+```
+
+작업 기록과 작업자 프롬프트에는 `skills/orca-conductor/...`처럼 저장소 루트 기준 상대경로만 적는다. 실제 worktree 절대경로는 `git worktree list`가 그때그때 알려준다.
 
 ## 검증
 

@@ -22,12 +22,15 @@ description: Kyle's Orca multi-agent conductor harness. Coordinate parallel codi
 | `references/rally-log.md` | 랠리 데이터 대장(append-only) — 라운드별 오류 종류·횟수·수렴·전환 이벤트 효과 축적 (모델 선택 최적화용, 2026-07-20 kyle 지시) | **랠리 종결 시 기록 의무** / 편성 판단 시 참고 |
 | `references/research-flow.md` | 외부 사례가 설계를 바꿀 수 있는지 판정하고 읽기 전용 리서치 카드를 구현 앞에 연결 | 구현 카드 생성 전 |
 | `references/routing-observability.md` | 모델 점수 학습용 append-only 실행 원장 — 선택·발령·완료는 스크립트 자동 기록, 수기는 검수 판정·커밋 2개 | 수기 이벤트(검수·커밋) 기록 전 |
+| `references/routing-exploration.md` | 안전한 작업의 최대 10%에서 대체 모델 조합을 실제 발령하는 제한적 탐색 규칙 | 탐색 비율·위험 표식 설정 전 |
+| `references/development.md` | 새 세션이 Git worktree를 다시 찾고 상대경로로 작업자를 인계하는 개발 규칙 | 스킬 자체 수정·재개 전 |
 | `references/routing-events.schema.json` | 라우팅 JSONL 한 줄의 기계 검증 스키마 | 원장 작성기·집계기 구현/검증 시 |
 | `scripts/watch-card.sh` | 카드 상태 감시 (run_in_background로 직접 실행, `&` 금지) | 대기 걸 때 |
 | `scripts/watch-inbox.sh` | 판 명패 앞 우편함 감시 — escalation/decision_gate 등 카드 상태가 안 바뀌는 신호용, 카드 감시와 병행 | 대기 걸 때 |
 | `scripts/select-routing-pair.sh` | PEP 723 환경으로 동적 라우터를 안전 실행하는 표준 진입점 | 구현·검수 편성 직전 |
 | `scripts/select_routing_pair.py` | 현재 쿼터·불능 provider·작업 크기로 작업자+검수자 조합을 함께 점수화하는 내부 구현 | 라우터 수정·검증 시 |
 | `scripts/routing_shadow.py` | 실제 발령은 유지하고 `taskClass`·하네스 적합도를 그림자 재점수화하는 관찰기 | 새 모델·하네스 실험 설계·검증 시 |
+| `scripts/routing_exploration.py` | 명시적으로 켠 안전한 0~10% 슬롯에서만 대체 조합을 실제 선택하고 근거를 구조화하는 선택기 | 제한적 실제 탐색 구현·검증 시 |
 
 ## Orca 공식 가이드 동기화 (2026-07-27 갱신)
 
@@ -42,7 +45,7 @@ description: Kyle's Orca multi-agent conductor harness. Coordinate parallel codi
 1. **검수 합격 단위는 지휘자가 자동 체크포인트 커밋한다 (2026-07-24 kyle 결정).** 치명·중요 0건과 요구된 실물 검증을 통과한 변경만, 소유 파일을 지정해 원자적으로 커밋한다. `git add -A` 금지, 작업자 커밋 금지. push·merge·배포는 kyle 승인 전 금지한다. **기존 이슈판 예외**: 이슈 기반 판은 검수 합격 시 랠리 브랜치 push + 이슈 코멘트(브랜치·SHA·검수 요약)까지 허용한다. 모두써티(moducerti_vibe 하위) 레포는 해당 레포 `dev-release` 브랜치 머지까지 자동이다. develop 합류(하루 1회)·main·이슈 close는 관문 뒤다. 단, 스키마·마이그레이션·보안·데이터 접촉, 스코프 이탈, 또는 라운드 사다리 소진이면 자동 진행을 멈추고 관문 대기한다. 모두써티 이슈판의 `🚧 개발중` 라벨·브랜치 코멘트·조직 보드 이동 자동화는 유지한다.
 2. worktree 삭제·병합은 결정 관문(gate) 승인 후에만.
 3. 일꾼 프롬프트에는 항상 "다른 파일 수정 금지 범위"와 "커밋 금지"를 명시한다.
-4. 배분 전 사용량을 확인하고 `scripts/select-routing-pair.sh`로 작업자+검수자 조합을 함께 고른다. Python 파일을 `python3`로 직접 실행하지 않는다. 429·기동 실패 provider는 후보에서 빼되, 고정된 다음 칸으로 이동하지 않고 남은 조합 전체를 다시 점수화한다.
+4. 배분 전 사용량을 확인하고 `scripts/select-routing-pair.sh`로 작업자+검수자 조합을 함께 고른다. Python 파일을 `python3`로 직접 실행하지 않는다. 429·기동 실패 provider는 후보에서 빼되, 고정된 다음 칸으로 이동하지 않고 남은 조합 전체를 다시 점수화한다. 실제 탐색은 `references/routing-exploration.md`의 안전 범위와 `0..10%` 상한을 지키며 명시적으로 켠 카드에서만 허용한다.
 5. 검수자 결과는 보고만 받는다. 수정 권한은 일꾼에게 재배분한다.
 6. Orca 내부 **프로젝트 감독**은 직접 코딩하지 않는다 — **진단·실측·검증 스크립트 작성도 코딩이다. 카드로 만들어 배분한다.** 프로젝트 감독은 설정·스폰 가능한 전담 세션이며, 기본값은 `gpt-5.6-sol` low다. 한 판의 카드 발령·상태 변경·검수 연결·합격 체크포인트 커밋은 해당 프로젝트 감독만 수행하는 단일 작성자 계약이다.
    - **조사 경계선 (2026-07-15 kyle 결정)**: 대상 파일을 아는 상태에서 **몇 개 파일 읽으면 끝나는 단순 대조**(diff·로그·장부·특정 함수 확인)는 지휘자 직접 허용. **원인을 모르는 상태에서 시작하는 탐색**(원인 추적, 코드 서칭, DB 실측)은 조사 카드로 배분한다 (`references/mechanics.md`의 조사 카드 계약). 프리셋은 roster.md의 조사 편성을 따른다.

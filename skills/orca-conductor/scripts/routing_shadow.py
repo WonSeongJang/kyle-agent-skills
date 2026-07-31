@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Annotated, ClassVar, TypeAlias
 
 import typer
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 
 class TaskClass(StrEnum):
@@ -69,6 +69,7 @@ class RoutingDecision(BaseModel):
     same_family: bool
     reasons: tuple[str, ...]
     ranked_pairs: tuple[RankedPair, ...] = Field(min_length=1)
+    exploration: JsonValue | None = None
 
 
 class ModelConfig(BaseModel):
@@ -194,6 +195,7 @@ def build_shadow_payload(
         same_family=decision.same_family,
         reasons=decision.reasons,
         ranked_pairs=decision.ranked_pairs,
+        exploration=decision.exploration,
         shadow=ShadowDecision(
             task_class=task_class,
             selected=ranked[0],
