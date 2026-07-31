@@ -63,3 +63,35 @@ run_worker_case() {
 
 run_worker_case single 1
 run_worker_case two 2
+
+run_hup_survival_case() {
+  local state_dir
+  local companion_pid
+  local status
+  state_dir=$(mktemp -d /tmp/orca-companion-hup-test.XXXXXX)
+  export FAKE_ORCA_STATE_DIR="$state_dir"
+  export FAKE_RELAY_ALERT_MODE=clean
+  export FAKE_WORKER_ALERT_MODE=none
+  export WATCH_DEADLINE_SEC=30
+
+  "$SKILL_DIR/scripts/conductor-companion.sh" term_supervisor term_relay 999 > "$state_dir/output.log" 2>&1 &
+  companion_pid=$!
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -f "$state_dir/status-count" ] && break
+    sleep 0.1
+  done
+  kill -HUP "$companion_pid"
+  sleep 0.2
+  kill -0 "$companion_pid"
+  kill -TERM "$companion_pid"
+  set +e
+  wait "$companion_pid"
+  status=$?
+  set -e
+
+  [ "$status" -eq 0 ]
+  printf 'PASS companion survives HUP and exits cleanly on TERM\n'
+  printf 'artifacts preserved: %s\n' "$state_dir"
+}
+
+run_hup_survival_case

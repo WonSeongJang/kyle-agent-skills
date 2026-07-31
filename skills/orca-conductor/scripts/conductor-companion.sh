@@ -124,7 +124,10 @@ except Exception:
 
 "$ORCA_BIN" orchestration check --terminal "$COORDINATOR_HANDLE" --types status --unread --json >/dev/null 2>&1 || true
 
-trap 'exit 0' INT TERM HUP
+# nohup으로 분리 실행한 companion은 부모 셸이 닫힐 때 오는 HUP을 무시해야 한다.
+# INT/TERM은 운영자가 지정 PID만 안전하게 종료할 수 있도록 정상 종료한다.
+trap 'exit 0' INT TERM
+trap '' HUP
 while [ "$(date +%s)" -lt "$DEADLINE" ]; do
   NOW=$(date +%s)
   "$ORCA_BIN" orchestration check --terminal "$COORDINATOR_HANDLE" --types status --unread --json >/dev/null 2>&1 || true
