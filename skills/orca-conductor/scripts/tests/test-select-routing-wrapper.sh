@@ -6,8 +6,9 @@ SKILL_DIR=$(cd "$SCRIPT_DIR/../.." && pwd)
 WRAPPER="$SKILL_DIR/scripts/select-routing-pair.sh"
 
 [ -x "$WRAPPER" ]
-"$WRAPPER" --help | grep -q -- '--quota-file'
-"$WRAPPER" --help | grep -q -- '--task-class'
+HELP_OUTPUT=$("$WRAPPER" --help)
+grep -q -- '--quota-file' <<< "$HELP_OUTPUT"
+grep -q -- '--task-class' <<< "$HELP_OUTPUT"
 printf 'PASS routing wrapper uses the declared PEP 723 environment\n'
 
 QA_DIR=$(mktemp -d)
