@@ -2,13 +2,13 @@
 
 ## Why
 
-[kyle]이 가격 인하 뒤 Luna를 단순 잡일 모델이 아니라 저비용 현장 감독과 안전한 구현 작업자로 활용할 수 있게 한다.
+[kyle]의 Orca 판에서 구형 중계기의 보고 권한이 사라져도 감지 결과가 묻히지 않고 현재 프로젝트 감독이 복구 판단을 이어받게 한다.
 
 ## 현재 작업
 
 | 브랜치 | 상태 | 목적 | 핵심 경로 |
 |---|---|---|---|
-| `agent/luna-effort-routing` | 구현·검증 중 | 중계기를 Luna High로 올리고 Luna XHigh를 안전한 구현 탐색 후보로 등록한다 | `skills/orca-conductor/references/mechanics.md`, `skills/orca-conductor/references/routing-providers.json` |
+| `agent/relay-legacy-fallback` | 구현·검증 중 | 중계기의 `[LEGACY READ-ONLY]` 보고 실패를 companion이 읽기 전용으로 감지하고 현재 감독을 한 번만 깨운다 | `skills/orca-conductor/scripts/conductor-companion.sh`, `skills/orca-conductor/references/mechanics.md` |
 
 ## 새 세션 재개 순서
 
@@ -22,13 +22,14 @@ git branch --show-current
 bash scripts/validate.sh
 ```
 
-현재 브랜치가 `agent/luna-effort-routing`이 아니면 수정하지 않는다.
+현재 브랜치가 `agent/relay-legacy-fallback`이 아니면 수정하지 않는다.
 
 ## 성공 기준
 
-- 중계기와 순찰의 최신 표준 명령이 `gpt-5.6-luna` + `high`를 사용한다.
-- Luna 작업자는 `xhigh`로 등록되며 `security`·`concurrency`에는 음의 성격 가산점을 가진다.
-- Luna Max는 과거 내부 실패 기록 때문에 자동 기본값으로 승격하지 않는다.
+- 중계기가 lifecycle 보고에서 `[LEGACY READ-ONLY]`를 받으면 같은 명령을 재시도하지 않고 구조화된 표식을 남긴다.
+- companion은 구조화된 표식 또는 기존 `legacy_read_only` 오류를 감지해 현재 프로젝트 감독을 한 번만 깨운다.
+- companion은 실행 기록(run)을 자동 인수하거나 카드·dispatch 상태를 직접 바꾸지 않는다.
+- 같은 표식이 화면에 남아 있어도 중복 기상이 발생하지 않는다.
 - `bash scripts/validate.sh`가 종료 코드 0이다.
 
 ## 작업자 경로 계약

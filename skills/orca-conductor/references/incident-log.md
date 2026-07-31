@@ -280,3 +280,9 @@
 - 정정: DISPATCH_FAILED 2회의 진짜 원인은 터미널 사망도 훅 업데이트도 아니라 **카드가 pending 상태**였던 것 (kyle의 훅 가설 검증 과정에서 확정 — opencode 새 터미널도 같은 카드에서 실패했고 ready 변경 후 성공). 즉 opencode 우회는 불필요했다.
 - 공범: dispatch-safe.sh가 dispatch 오류 원문을 /dev/null로 버려 "task is pending"류 자기설명 오류가 숨겨짐 → 감독이 터미널 문제로 오진.
 - 박제: dispatch-safe.sh가 DISPATCH_FAILED 시 오류 원문 500자 + "pending이면 ready 후 재발령" 힌트를 출력하도록 수정 (회귀 9/9). 교훈: "오류 원문 보고 의무"는 에이전트만이 아니라 **스크립트에도** 적용된다 — 도구가 삼킨 오류는 에이전트의 오진이 된다.
+
+## 2026-07-31 — 중계기가 정체를 찾았지만 LEGACY READ-ONLY로 감독 보고 실패
+
+- 사고: 중계기가 같은 활성 터미널의 연속 무진행 2회를 확인했지만 `escalation` 발송이 `legacy_read_only`로 거부됐고 `effectsApplied=false`였다. 화면에는 진단이 남았지만 현재 프로젝트 감독이 깨어나지 않아 판 전체가 멈췄고 kyle이 직접 발견했다.
+- 원인: Orca 계약 갱신 뒤 구형 중계기 프로세스는 파일과 터미널을 읽을 수 있어도 lifecycle 변경 권한이 없는 `[LEGACY READ-ONLY]` 상태가 될 수 있다. 기존 구조는 우편함의 성공한 신호만 companion이 깨웠고, 중계기 화면에 남은 **발송 실패 자체**를 현재 감독으로 전달하는 길이 없었다.
+- 박제: 중계기는 거부 즉시 구조화된 `ORCA_LEGACY_READ_ONLY_REPORT` 한 줄을 출력하고 재시도를 멈춘다. companion이 이 표식과 기존 원문 오류를 읽기 전용으로 감지해 현재 감독을 한 번만 깨운다. 자동 Run 인수는 금지하며, 현재 감독이 원래 감독의 권한 상실을 확인한 경우에만 공식 `run-use --takeover-legacy` 절차를 사용한다.
