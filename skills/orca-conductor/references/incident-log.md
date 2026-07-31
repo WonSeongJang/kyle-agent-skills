@@ -298,3 +298,9 @@
 - 증상: 기존 companion을 안전하게 종료한 뒤 `nohup`으로 새 PID를 확인했지만, 부모 셸이 끝난 직후 새 PID도 사라졌다.
 - 원인: 스크립트가 `HUP`을 정상 종료 신호로 덮어써서, `nohup`의 HUP 무시 동작을 다시 취소하고 있었다.
 - 박제: `HUP`은 명시적으로 무시하고, 운영자 종료용 `INT`와 `TERM`만 정상 종료한다. 회귀 테스트는 HUP 뒤 생존과 TERM 뒤 정상 종료를 함께 확인한다.
+
+## 2026-07-31 — launchctl companion은 살아 있지만 Orca 명령을 실행하지 못함
+
+- 증상: `launchctl submit`으로 부모 PID 1의 companion이 수분간 살아 있었지만 새 작업자의 `legacy_read_only` 완료 실패를 감지하지 못했고 stdout에는 `KICKER_FAIL`만 남았다.
+- 원인: launchd의 축소된 PATH에는 `/usr/local/bin`이 없어 스크립트의 기본 `orca` 명령을 찾지 못했다. 프로세스 생존 확인만 하고 실제 `task-list/read/send` 끝단을 확인하지 않아 거짓 정상 판정이 됐다.
+- 박제: launchctl 실행에는 `ORCA_BIN` 절대경로를 전달한다. 스크립트도 대표 설치 경로를 자동 탐색하고 없으면 즉시 실패한다. 기동 합격은 PID 생존이 아니라 실제 Orca 조회와 wake 성공까지다.

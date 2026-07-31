@@ -64,6 +64,28 @@ run_worker_case() {
 run_worker_case single 1
 run_worker_case two 2
 
+run_explicit_orca_bin_case() {
+  local state_dir
+  local status
+  state_dir=$(mktemp -d /tmp/orca-companion-bin-test.XXXXXX)
+  export FAKE_ORCA_STATE_DIR="$state_dir"
+  export FAKE_RELAY_ALERT_MODE=structured
+  export FAKE_WORKER_ALERT_MODE=none
+
+  set +e
+  PATH=/usr/bin:/bin ORCA_BIN="$SCRIPT_DIR/fixtures/orca" \
+    "$SKILL_DIR/scripts/conductor-companion.sh" term_supervisor term_relay 999 > "$state_dir/output.log" 2>&1
+  status=$?
+  set -e
+
+  [ "$status" -eq 1 ]
+  [ "$(rg -c 'task=task_legacy' "$state_dir/sends.log")" -eq 1 ]
+  printf 'PASS companion uses explicit ORCA_BIN with launchd-like PATH\n'
+  printf 'artifacts preserved: %s\n' "$state_dir"
+}
+
+run_explicit_orca_bin_case
+
 run_hup_survival_case() {
   local state_dir
   local companion_pid

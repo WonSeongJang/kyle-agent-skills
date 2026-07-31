@@ -9,7 +9,22 @@ RELAY_HANDLE="$2"
 KICKER_INTERVAL="${3:-300}"
 POLL_INTERVAL="${COMPANION_POLL_INTERVAL_SEC:-30}"
 WAKE_TERMINAL_HANDLE="${COMPANION_WAKE_TERMINAL_HANDLE:-}"
-ORCA_BIN="${ORCA_BIN:-orca}"
+REQUESTED_ORCA_BIN="${ORCA_BIN:-}"
+if [ -n "$REQUESTED_ORCA_BIN" ]; then
+  ORCA_BIN=$(command -v "$REQUESTED_ORCA_BIN" 2>/dev/null || true)
+elif command -v orca >/dev/null 2>&1; then
+  ORCA_BIN=$(command -v orca)
+elif [ -x /usr/local/bin/orca ]; then
+  ORCA_BIN=/usr/local/bin/orca
+elif [ -x /opt/homebrew/bin/orca ]; then
+  ORCA_BIN=/opt/homebrew/bin/orca
+else
+  ORCA_BIN=""
+fi
+if [ -z "$ORCA_BIN" ] || [ ! -x "$ORCA_BIN" ]; then
+  echo "ORCA_BIN_UNAVAILABLE requested=${REQUESTED_ORCA_BIN:-auto}" >&2
+  exit 3
+fi
 DEADLINE=$(( $(date +%s) + ${WATCH_DEADLINE_MIN:-720} * 60 ))
 NEXT_KICKER=$(( $(date +%s) + KICKER_INTERVAL ))
 if [ -n "${WATCH_DEADLINE_SEC:-}" ]; then

@@ -32,6 +32,7 @@ bash scripts/validate.sh
 - 같은 표식이 화면에 남아 있어도 중복 기상이 발생하지 않는다.
 - 서로 다른 task+dispatch에서 같은 원문 오류가 나면 각각 한 번씩 기상한다.
 - 중계기가 표식을 작업자 화면에 보내지 않아도 companion이 작업자 화면의 거부 원문을 직접 감지한다.
+- launchctl처럼 PATH가 축소된 환경에서도 실제 Orca 실행 파일을 찾아 `task-list/read/send` 끝단이 동작한다.
 - `bash scripts/validate.sh`가 종료 코드 0이다.
 
 ## 작업자 경로 계약
