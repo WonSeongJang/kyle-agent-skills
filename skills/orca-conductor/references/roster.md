@@ -24,7 +24,7 @@
 
 | 별칭 | 정식 모델명 | 위치 | 비고 |
 |---|---|---|---|
-| luna | gpt-5.6-luna | codex | sol보다 가벼운 GPT. 내부 잡무 주력 |
+| luna | gpt-5.6-luna | codex | 가격 인하 뒤 고강도 비용 효율 우수. 중계 high, 구현 xhigh를 기본 시험값으로 사용 |
 | sol | gpt-5.6-sol | codex, gjc(codexpro) | GPT 주력 |
 | terra | gpt-5.6-terra | codex, gjc(codexpro EXECUTOR) | sol 반값 — 정식 편입(2026-07-20 kyle). codex 직접 호출 기동은 첫 발령 때 실측 |
 | glm5.2 | glm-5.2 | codex(opencodex 프록시, zai) | 컨텍스트 1M. gjc(zai)에서 이관 (2026-07-21 kyle 결정) |
@@ -85,7 +85,7 @@
 
 ## 강도 운용 원칙 (2026-07-20 kyle v4)
 
-**구현 Low/medium 통일(속도 우선), 검수 sol-medium 고정, xhigh/max 전면 폐지(kyle 지시 시만 예외).** terra 구현만 medium/high 2단. (근거 실측: rally-log `rottie-tab-blank`·`rottie-m10` — high 이상은 과잉 분석으로 시간만 태우고, max는 서브에이전트 폭주·정체까지 유발)
+**기본 구현은 Low/medium으로 빠르게 돌리고, 검수는 sol-medium 고정한다. Luna는 2026-07-31 가격 인하와 DeepSWE 고강도 성능을 근거로 구현 xhigh를 제한적 실제 탐색 후보로 다시 연다. 중계·순찰은 high를 기본으로 쓴다. max는 과거 내부 실측에서 서브에이전트 폭주·정체가 있었으므로 자동 기본값으로 쓰지 않고 별도 카드에서만 재검증한다.** terra 구현은 medium/high 2단을 유지한다.
 
 ## 2층 — 역할 편성표
 
@@ -100,6 +100,8 @@
 **작업 성격 그림자 점수 (2026-07-31 kyle 결정)**: `select-routing-pair.sh`에 반드시 `--task-class <분류>`를 넘긴다. 실제 stdout과 발령 모델은 기존 선택 결과를 그대로 유지하고, 자동 원장의 `payload.shadow`에만 `기존 점수 + 작업자 taskClassPrior + 검수자 taskClassPrior` 순위를 최대 10개 기록한다. `taskClassPrior`는 실적이 아니라 roster 관찰로 시작한 임시 가설이며 운영 선택에 사용하지 않는다. 같은 이벤트의 실제 선택과 그림자 선택을 비교해 표본을 모은 뒤에만 안전한 작업의 제한적 탐색으로 승격한다.
 
 **모델·하네스 등록 계약 (2026-07-31 kyle 결정)**: 모델은 `provider + model id + role + effort + harness` 조합으로 식별한다. `routing-providers.json`의 모든 모델은 `harness`와 `taskClassPrior`를 명시한다. 현재 하네스 값은 `codex`, `claude-code`이며 이후 `kiro`, `gjc`, `lm-studio` 같은 연결기를 같은 필드에 추가한다. 새 값은 먼저 그림자 기록으로만 평가하고, 실행 명령·상태 확인·사용량 수집·중단 계약이 검증되기 전에는 실제 후보로 켜지 않는다. 로컬 모델은 자동 탐색하지 않으며 LM Studio 연결기를 명시적으로 등록한 경우만 후보가 된다.
+
+**Luna 고강도 재편입 (2026-07-31 kyle 결정)**: Datacurve DeepSWE v1.1 공식 리더보드의 `gpt-5.6-luna[max]`는 67%±4%, 평균 비용 $0.61, 출력 73k, 102 steps로 보고됐다. 이 외부 수치는 모델 선택의 출발 가설일 뿐 우리 하네스 실적은 아니므로, 자동 기본 편성은 `luna-xhigh` 품질 84의 임시값으로 등록하고 `research`·`docs_config`·`qa` 가산점, `security`·`concurrency` 감점을 그림자 기록에 둔다. 안전한 카드의 제한적 탐색으로 실제 첫 합격률·왕복·시간·사용량을 모은 뒤 품질값과 실제 선택 승격 여부를 다시 정한다. 출처: https://deepswe.datacurve.ai/
 
 **Opus 작업자 실험 (2026-07-25 kyle 결정)**: 복잡한 카드에서 Terra 대비 성과를 측정하기 위해 Opus medium을 실험 작업자로 등록한다. `--experiment-key '[판]:카드명'`처럼 같은 카드에서 변하지 않는 키를 반드시 넣으며, SHA-256 기반 고정 버킷의 20%에서만 Opus 작업자 후보가 열린다. 같은 키는 재실행해도 같은 군에 속하므로 라우터 재조회가 실험 비율을 왜곡하지 않는다. Opus 실험군의 검수자는 OpenAI 계열로 제한해 현재는 `Opus medium → Sol medium`만 허용한다. 키가 없거나 실험 슬롯 밖이거나 Anthropic 예약선을 침범하면 Opus 작업자는 닫히고 기존 후보를 다시 점수화한다. `reasons`의 `experiment_bucket`, `experiment_share`와 기존 `.orca/routing-events/<판>.jsonl` 결과를 함께 기록해 첫 합격률·왕복·시간·사용량을 비교한다.
 
@@ -135,9 +137,9 @@ curl -s http://127.0.0.1:10100/api/provider-quotas \
 
 **effort 라우팅 (2026-07-20 kyle v2 — dev는 빠르게 여러 번, 품질은 검수 관문이 잡는다)**. terra-max가 필요할 정도면 sol로 모델 승급이 낫다:
 
-| 난이도 판단 | codex-kimi1m(effort) | codex-glm52(effort) | terra(codex effort) |
-|---|---|---|---|
-| 전 난이도 공통 | **Low (통일)** | **medium (통일, 2026-07-21 kyle 결정)** | 단순 medium / 보통·까다로움 **high** (xhigh 폐지) |
+| 난이도 판단 | codex-kimi1m(effort) | codex-glm52(effort) | luna(codex effort) | terra(codex effort) |
+|---|---|---|---|---|
+| 전 난이도 공통 | **Low (통일)** | **medium (통일, 2026-07-21 kyle 결정)** | 중계 high / 안전한 구현 탐색 **xhigh** | 단순 medium / 보통·까다로움 **high** |
 
 - **kimi·glm effort 설정법 (2026-07-21 개정 — codex CLI 이관)**: 이제 기동 시 `-c model_reasoning_effort` 플래그로 한 번에 정한다. 구 kimi CLI의 TUI 수동 `/effort` 설정·캐시 무효화 주의는 더 이상 해당 없음. kimi(k3[1m]) 지원 단계 = low·high·max, glm(5.2) 지원 단계 = low·medium·high·xhigh·max (2026-07-21 `ocx models` 카탈로그 실측 — 두 모델 모두 ultra 없음).
 - terra는 sol 반값으로 확인돼 **정식 편입** (2026-07-20 kyle 결정). 단 codex CLI의 `gpt-5.6-terra` 직접 호출은 아직 기동 실측 전 — 첫 발령 때 결과를 테스트 대장에 기록하고, 즉사하면 `codex-sol-high`로 임시 폴백 후 kyle에게 보고한다.
@@ -176,7 +178,7 @@ curl -s http://127.0.0.1:10100/api/provider-quotas \
 
 | 엔진 | 확인할 것 | 상태 | 메모 |
 |---|---|---|---|
-| `codex-luna-low` | 초경량 잡일용 가치 | 미측정 | 문서 이동·문구 수정 등. 외부 벤치 조언도 quick=luna/low |
+| `codex-luna-xhigh` | 안전한 구현·조사 품질과 실제 비용 | 탐색 등록 | 가격 인하 뒤 신규 기본 작업자 후보. security·concurrency 제외 후 제한적 탐색 |
 | `codex-glm52-high` | medium 대비 속도/품질 | 미측정 | 조사용 후보 (구 `gjc-glm5.2-high`에서 이관) |
 | `codex-sol-max` | xhigh 대비 체감 차이 | 미측정·저우선 | 외부 조언: high↔xhigh 벤치 격차가 가격 격차보다 작음 |
 | `codex-terra-max` | 기동(모델 ID 유효)·구현 품질 | **정식 편입** (2026-07-20 kyle — sol 반값). 기동 실측은 첫 발령 때 기록 | 구현 사다리 3단 |

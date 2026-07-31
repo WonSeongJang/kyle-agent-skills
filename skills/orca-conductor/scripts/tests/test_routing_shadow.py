@@ -30,6 +30,22 @@ def test_all_registered_models_declare_harness_and_task_class_priors() -> None:
     assert all(isinstance(model["taskClassPrior"], dict) for model in models)
 
 
+def test_luna_worker_is_registered_at_xhigh_with_risk_priors() -> None:
+    raw = json.loads(CONFIG.read_text())
+    openai = next(provider for provider in raw["providers"] if provider["id"] == "openai")
+    luna = next(
+        model
+        for model in openai["models"]
+        if model["id"] == "gpt-5.6-luna" and model["role"] == "developer"
+    )
+
+    assert luna["effort"] == "xhigh"
+    assert luna["harness"] == "codex"
+    assert luna["taskClassPrior"]["qa"] > 0
+    assert luna["taskClassPrior"]["security"] < 0
+    assert luna["taskClassPrior"]["concurrency"] < 0
+
+
 def test_frontend_prior_changes_only_the_shadow_selection() -> None:
     shadow = load_shadow()
     config = shadow.RoutingConfig.model_validate(
