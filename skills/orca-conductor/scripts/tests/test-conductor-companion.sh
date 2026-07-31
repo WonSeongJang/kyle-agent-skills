@@ -63,6 +63,9 @@ run_worker_case() {
 
 run_worker_case single 1
 run_worker_case two 2
+run_worker_case transcript 1
+[ "$(cat "$FAKE_ORCA_STATE_DIR/transcript-read-count")" -gt 0 ]
+printf 'PASS companion falls back to dispatch transcript when terminal rendering collapses\n'
 
 run_explicit_orca_bin_case() {
   local state_dir

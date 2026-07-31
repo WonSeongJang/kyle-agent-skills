@@ -23,7 +23,7 @@ fi
 
 if [ "${1:-}" = "orchestration" ] && [ "${2:-}" = "task-list" ]; then
   case "${FAKE_WORKER_ALERT_MODE:-none}" in
-    single)
+    single|transcript)
       printf '%s\n' '{"result":{"tasks":[{"id":"task_worker_1","status":"dispatched","dispatch_id":"ctx_worker_1","assignee_handle":"term_worker_legacy"}]}}'
       ;;
     two)
@@ -33,6 +33,17 @@ if [ "${1:-}" = "orchestration" ] && [ "${2:-}" = "task-list" ]; then
       printf '%s\n' '{"result":{"tasks":[]}}'
       ;;
   esac
+  exit 0
+fi
+
+if [ "${1:-}" = "orchestration" ] && [ "${2:-}" = "worker-read" ]; then
+  count=$(($(cat "$STATE_DIR/transcript-read-count" 2>/dev/null || echo 0) + 1))
+  printf '%s\n' "$count" > "$STATE_DIR/transcript-read-count"
+  if [ "${FAKE_WORKER_ALERT_MODE:-none}" = "transcript" ]; then
+    printf '%s\n' '{"result":{"transcript":{"messages":[{"role":"tool","blocks":[{"type":"tool-result","output":"This retained legacy coordinator could not prove its original process identity. No effects were applied. legacy_read_only effectsApplied=false"}]}]}}}'
+  else
+    printf '%s\n' '{"result":{"transcript":{"messages":[]}}}'
+  fi
   exit 0
 fi
 
@@ -54,7 +65,11 @@ if [ "${1:-}" = "terminal" ] && [ "${2:-}" = "read" ]; then
   done
   case "$terminal_handle" in
     term_worker_legacy|term_worker_legacy_2)
-      printf '%s\n' '{"result":{"terminal":{"tail":"worker_done failed: This retained legacy coordinator could not prove its original process identity. No effects were applied. legacy_read_only effectsApplied=false"}}}'
+      if [ "${FAKE_WORKER_ALERT_MODE:-none}" = "transcript" ]; then
+        printf '%s\n' '{"result":{"terminal":{"tail":"BB"}}}'
+      else
+        printf '%s\n' '{"result":{"terminal":{"tail":"worker_done failed: This retained legacy coordinator could not prove its original process identity. No effects were applied. legacy_read_only effectsApplied=false"}}}'
+      fi
       exit 0
       ;;
   esac

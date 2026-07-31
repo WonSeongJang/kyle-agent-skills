@@ -304,3 +304,9 @@
 - 증상: `launchctl submit`으로 부모 PID 1의 companion이 수분간 살아 있었지만 새 작업자의 `legacy_read_only` 완료 실패를 감지하지 못했고 stdout에는 `KICKER_FAIL`만 남았다.
 - 원인: launchd의 축소된 PATH에는 `/usr/local/bin`이 없어 스크립트의 기본 `orca` 명령을 찾지 못했다. 프로세스 생존 확인만 하고 실제 `task-list/read/send` 끝단을 확인하지 않아 거짓 정상 판정이 됐다.
 - 박제: launchctl 실행에는 `ORCA_BIN` 절대경로를 전달한다. 스크립트도 대표 설치 경로를 자동 탐색하고 없으면 즉시 실패한다. 기동 합격은 PID 생존이 아니라 실제 Orca 조회와 wake 성공까지다.
+
+## 2026-07-31 — Fable 완료 뒤 터미널 화면이 BB로 붕괴해 legacy 보고를 놓침
+
+- 증상: companion과 실제 Orca 조회·wake는 정상인데 Fable 재검토가 끝난 뒤 카드가 계속 dispatched에 남았다. `terminal read`는 실제 완료 전문 대신 `BB` 한 줄만 반환했다.
+- 원인: companion의 작업자 직접 감지가 렌더된 터미널 화면만 읽었다. 동일 dispatch의 transcript에는 `worker_done` 거부 원문과 exit 1이 온전히 남아 있었지만 확인하지 않았다.
+- 박제: 화면 우선 감지는 유지하고 원문이 없을 때만 dispatch별 최근 transcript를 읽는다. 화면 붕괴 fixture와 transcript 폴백 회귀 테스트를 둔다.

@@ -33,6 +33,7 @@ bash scripts/validate.sh
 - 서로 다른 task+dispatch에서 같은 원문 오류가 나면 각각 한 번씩 기상한다.
 - 중계기가 표식을 작업자 화면에 보내지 않아도 companion이 작업자 화면의 거부 원문을 직접 감지한다.
 - launchctl처럼 PATH가 축소된 환경에서도 실제 Orca 실행 파일을 찾아 `task-list/read/send` 끝단이 동작한다.
+- Claude/Fable 터미널 렌더링이 `BB`처럼 붕괴해도 dispatch transcript에서 lifecycle 거부를 복구한다.
 - `bash scripts/validate.sh`가 종료 코드 0이다.
 
 ## 작업자 경로 계약

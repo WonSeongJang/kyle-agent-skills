@@ -77,12 +77,12 @@ if "legacy_read_only" in lower and ("effectsapplied=false" in lower or "no effec
 }
 
 read_worker_legacy_alerts() {
-  local tasks_out task_id dispatch_id worker_handle worker_out
+  local tasks_out task_id dispatch_id worker_handle worker_out worker_alert transcript_out
   tasks_out=$("$ORCA_BIN" orchestration task-list --brief --from "$COORDINATOR_HANDLE" --json 2>/dev/null || true)
   while IFS=$'\t' read -r task_id dispatch_id worker_handle; do
     [ -n "$task_id" ] && [ -n "$dispatch_id" ] && [ -n "$worker_handle" ] || continue
     worker_out=$("$ORCA_BIN" terminal read --terminal "$worker_handle" --json 2>/dev/null || true)
-    printf '%s' "$worker_out" | TASK_ID="$task_id" DISPATCH_ID="$dispatch_id" WORKER_HANDLE="$worker_handle" python3 -c '
+    worker_alert=$(printf '%s' "$worker_out" | TASK_ID="$task_id" DISPATCH_ID="$dispatch_id" WORKER_HANDLE="$worker_handle" python3 -c '
 import json,os,re,sys
 try:
     data=json.load(sys.stdin)
@@ -104,6 +104,44 @@ dispatch_id=os.environ["DISPATCH_ID"]
 worker_handle=os.environ["WORKER_HANDLE"]
 key=f"worker:{task_id}:{dispatch_id}"
 summary=f"WORKER_LEGACY_READ_ONLY task={task_id} dispatch={dispatch_id} worker={worker_handle} summary=작업자 lifecycle 보고가 적용되지 않음"
+print(key+"\t"+summary)
+'
+)
+    if [ -n "$worker_alert" ]; then
+      printf '%s\n' "$worker_alert"
+      continue
+    fi
+
+    # Claude/Fable 등 일부 TUI는 완료 뒤 렌더된 화면이 "BB" 같은 한 줄로 무너질 수 있다.
+    # 화면에서 못 찾았을 때만 dispatch별 transcript 최근 메시지를 읽어 lifecycle 거부를 복구한다.
+    transcript_out=$("$ORCA_BIN" orchestration worker-read --dispatch "$dispatch_id" --source transcript --limit 12 --json 2>/dev/null || true)
+    printf '%s' "$transcript_out" | TASK_ID="$task_id" DISPATCH_ID="$dispatch_id" WORKER_HANDLE="$worker_handle" python3 -c '
+import json,os,re,sys
+try:
+    data=json.load(sys.stdin)
+except Exception:
+    raise SystemExit(0)
+result=data.get("result") or {}
+transcript=result.get("transcript") or {}
+messages=transcript.get("messages") or []
+parts=[]
+for message in messages:
+    for block in message.get("blocks") or []:
+        for field in ("text", "output"):
+            value=block.get(field)
+            if value:
+                parts.append(str(value))
+flat=re.sub(r"\s+", " ", " ".join(parts)).strip()
+lower=flat.lower()
+legacy_code="legacy_read_only" in lower and ("effectsapplied=false" in lower or "no effects were applied" in lower)
+legacy_text="retained legacy coordinator" in lower and "no effects were applied" in lower
+if not (legacy_code or legacy_text):
+    raise SystemExit(0)
+task_id=os.environ["TASK_ID"]
+dispatch_id=os.environ["DISPATCH_ID"]
+worker_handle=os.environ["WORKER_HANDLE"]
+key=f"worker:{task_id}:{dispatch_id}"
+summary=f"WORKER_LEGACY_READ_ONLY task={task_id} dispatch={dispatch_id} worker={worker_handle} summary=작업자 transcript에서 lifecycle 보고 미적용 확인"
 print(key+"\t"+summary)
 '
   done < <(printf '%s' "$tasks_out" | python3 -c '
