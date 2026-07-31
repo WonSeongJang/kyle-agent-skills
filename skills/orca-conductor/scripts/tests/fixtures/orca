@@ -21,6 +21,21 @@ if [ "${1:-}" = "orchestration" ] && [ "${2:-}" = "check" ]; then
   exit 0
 fi
 
+if [ "${1:-}" = "orchestration" ] && [ "${2:-}" = "task-list" ]; then
+  case "${FAKE_WORKER_ALERT_MODE:-none}" in
+    single)
+      printf '%s\n' '{"result":{"tasks":[{"id":"task_worker_1","status":"dispatched","dispatch_id":"ctx_worker_1","assignee_handle":"term_worker_legacy"}]}}'
+      ;;
+    two)
+      printf '%s\n' '{"result":{"tasks":[{"id":"task_worker_1","status":"dispatched","dispatch_id":"ctx_worker_1","assignee_handle":"term_worker_legacy"},{"id":"task_worker_2","status":"dispatched","dispatch_id":"ctx_worker_2","assignee_handle":"term_worker_legacy_2"}]}}'
+      ;;
+    *)
+      printf '%s\n' '{"result":{"tasks":[]}}'
+      ;;
+  esac
+  exit 0
+fi
+
 if [ "${1:-}" = "terminal" ] && [ "${2:-}" = "send" ]; then
   printf '%s\n' "$*" >> "$STATE_DIR/sends.log"
   printf '%s\n' '{"ok":true}'
@@ -28,12 +43,29 @@ if [ "${1:-}" = "terminal" ] && [ "${2:-}" = "send" ]; then
 fi
 
 if [ "${1:-}" = "terminal" ] && [ "${2:-}" = "read" ]; then
+  terminal_handle=""
+  previous=""
+  for argument in "$@"; do
+    if [ "$previous" = "--terminal" ]; then
+      terminal_handle="$argument"
+      break
+    fi
+    previous="$argument"
+  done
+  case "$terminal_handle" in
+    term_worker_legacy|term_worker_legacy_2)
+      printf '%s\n' '{"result":{"terminal":{"tail":"worker_done failed: This retained legacy coordinator could not prove its original process identity. No effects were applied. legacy_read_only effectsApplied=false"}}}'
+      exit 0
+      ;;
+  esac
   count=$(($(cat "$STATE_DIR/relay-read-count" 2>/dev/null || echo 0) + 1))
   printf '%s\n' "$count" > "$STATE_DIR/relay-read-count"
-  if [ "${FAKE_RELAY_ALERT_MODE:-structured}" = "raw" ]; then
+  if [ "${FAKE_RELAY_ALERT_MODE:-structured}" = "clean" ]; then
+    printf '%s\n' '{"result":{"terminal":{"tail":"relay idle"}}}'
+  elif [ "${FAKE_RELAY_ALERT_MODE:-structured}" = "raw" ]; then
     printf '%s\n' '{"result":{"terminal":{"tail":"감독 보고 실패: legacy_read_only 오류로 전송되지 않았습니다. effectsApplied=false입니다."}}}'
   else
-    printf '%s\n' '{"result":{"terminal":{"tail":"ORCA_LEGACY_READ_ONLY_REPORT task=task_legacy dispatch=dispatch_legacy type=escalation summary=no-progress"}}}'
+    printf '%s\n' '{"result":{"terminal":{"tail":"ORCA_LEGACY_READ_ONLY_REPORT task=task_legacy dispatch=ctx_legacy type=escalation summary=no-progress"}}}'
   fi
   exit 0
 fi

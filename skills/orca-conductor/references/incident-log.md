@@ -286,3 +286,9 @@
 - 사고: 중계기가 같은 활성 터미널의 연속 무진행 2회를 확인했지만 `escalation` 발송이 `legacy_read_only`로 거부됐고 `effectsApplied=false`였다. 화면에는 진단이 남았지만 현재 프로젝트 감독이 깨어나지 않아 판 전체가 멈췄고 kyle이 직접 발견했다.
 - 원인: Orca 계약 갱신 뒤 구형 중계기 프로세스는 파일과 터미널을 읽을 수 있어도 lifecycle 변경 권한이 없는 `[LEGACY READ-ONLY]` 상태가 될 수 있다. 기존 구조는 우편함의 성공한 신호만 companion이 깨웠고, 중계기 화면에 남은 **발송 실패 자체**를 현재 감독으로 전달하는 길이 없었다.
 - 박제: 중계기는 거부 즉시 구조화된 `ORCA_LEGACY_READ_ONLY_REPORT` 한 줄을 출력하고 재시도를 멈춘다. companion이 이 표식과 기존 원문 오류를 읽기 전용으로 감지해 현재 감독을 한 번만 깨운다. 자동 Run 인수는 금지하며, 현재 감독이 원래 감독의 권한 상실을 확인한 경우에만 공식 `run-use --takeover-legacy` 절차를 사용한다.
+
+## 2026-07-31 — 첫 LEGACY READ-ONLY 보완이 다음 작업자 완료를 놓침
+
+- 사고: 첫 보완 뒤 Todo 6 작업자의 `worker_done`이 같은 오류로 거부됐지만 감독이 다시 깨어나지 않았다. 중계기는 구조화 표식을 자기 화면이 아니라 작업자 화면에 `terminal send`했고, companion은 중계기 화면만 읽었다. 원문 폴백 중복 키도 `raw:legacy_read_only` 하나라 Todo 5 사건 뒤 Todo 6 사건을 같은 것으로 버렸다.
+- 원인: 감지 위치와 사건 식별자가 실제 실패 주체인 작업자·`taskId+dispatchId`를 포함하지 않았다.
+- 박제: companion이 현재 `dispatched` 작업자 화면도 읽기 전용으로 확인하고 `taskId+dispatchId`별로 깨운다. 중계기 프롬프트에는 작업자 터미널 전송 금지와 자기 응답 출력 의무를 명시하고, 서로 다른 두 dispatch가 각각 한 번 깨우는 회귀 테스트를 둔다.

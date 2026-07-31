@@ -16,6 +16,7 @@ run_case() {
   state_dir=$(mktemp -d /tmp/orca-companion-test.XXXXXX)
   export FAKE_ORCA_STATE_DIR="$state_dir"
   export FAKE_RELAY_ALERT_MODE="$mode"
+  export FAKE_WORKER_ALERT_MODE=none
 
   set +e
   "$SKILL_DIR/scripts/conductor-companion.sh" term_supervisor term_relay 999 > "$state_dir/output.log" 2>&1
@@ -34,3 +35,31 @@ run_case() {
 
 run_case structured 'LEGACY_READ_ONLY term_relay.*task=task_legacy'
 run_case raw 'LEGACY_READ_ONLY term_relay.*기존 중계기 출력'
+
+run_worker_case() {
+  local mode="$1"
+  local expected_count="$2"
+  local state_dir
+  local status
+  state_dir=$(mktemp -d /tmp/orca-companion-worker-test.XXXXXX)
+  export FAKE_ORCA_STATE_DIR="$state_dir"
+  export FAKE_RELAY_ALERT_MODE=clean
+  export FAKE_WORKER_ALERT_MODE="$mode"
+
+  set +e
+  "$SKILL_DIR/scripts/conductor-companion.sh" term_supervisor term_relay 999 > "$state_dir/output.log" 2>&1
+  status=$?
+  set -e
+
+  [ "$status" -eq 1 ]
+  [ "$(rg -c 'WORKER_LEGACY_READ_ONLY' "$state_dir/sends.log")" -eq "$expected_count" ]
+  [ "$(rg -c 'WORKER_LEGACY_READ_ONLY task=task_worker_1 dispatch=ctx_worker_1' "$state_dir/sends.log")" -eq 1 ]
+  if [ "$expected_count" -eq 2 ]; then
+    [ "$(rg -c 'WORKER_LEGACY_READ_ONLY task=task_worker_2 dispatch=ctx_worker_2' "$state_dir/sends.log")" -eq 1 ]
+  fi
+  printf 'PASS companion wakes once for %s worker legacy alerts\n' "$expected_count"
+  printf 'artifacts preserved: %s\n' "$state_dir"
+}
+
+run_worker_case single 1
+run_worker_case two 2
