@@ -1,0 +1,31 @@
+#!/bin/bash
+set -u
+
+STATE_DIR="${FAKE_ORCA_STATE_DIR:?}"
+if [ "${1:-}" = "orchestration" ] && [ "${2:-}" = "check" ]; then
+  case " $* " in
+    *" --types status "*)
+      count=$(($(cat "$STATE_DIR/status-count" 2>/dev/null || echo 0) + 1))
+      printf '%s\n' "$count" > "$STATE_DIR/status-count"
+      printf '%s\n' '{"result":{"messages":[{"id":"status-1","type":"status","from":"term_relay","body":"ack"}]}}'
+      exit 0
+      ;;
+  esac
+  count=$(($(cat "$STATE_DIR/worker-count" 2>/dev/null || echo 0) + 1))
+  printf '%s\n' "$count" > "$STATE_DIR/worker-count"
+  if [ "$count" -eq 1 ]; then
+    printf '%s\n' '{"result":{"messages":[]}}'
+  else
+    printf '%s\n' '{"result":{"messages":[{"id":"direct-1","type":"worker_done","from":"term_worker","body":"done","payload":{"taskId":"task_1","dispatchId":"dispatch_1"}},{"id":"direct-2","type":"worker_done","from":"term_worker","body":"done duplicate","payload":{"taskId":"task_1","dispatchId":"dispatch_1"}},{"id":"relay-1","type":"worker_done","from":"term_relay","body":"mirrored done","payload":{"taskId":"relay_card","dispatchId":"relay_dispatch"}}]}}'
+  fi
+  exit 0
+fi
+
+if [ "${1:-}" = "terminal" ] && [ "${2:-}" = "send" ]; then
+  printf '%s\n' "$*" >> "$STATE_DIR/sends.log"
+  printf '%s\n' '{"ok":true}'
+  exit 0
+fi
+
+printf '%s\n' "unexpected fake orca call: $*" >&2
+exit 2

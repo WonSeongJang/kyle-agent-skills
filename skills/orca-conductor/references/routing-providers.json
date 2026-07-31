@@ -1,0 +1,137 @@
+{
+  "providers": [
+    {
+      "id": "kimi",
+      "family": "kimi",
+      "quotaKey": "kimi",
+      "enabled": true,
+      "weeklyReservePercent": 10,
+      "models": [
+        {
+          "id": "kimi/k3[1m]",
+          "role": "developer",
+          "effort": "low",
+          "quality": 82,
+          "harness": "codex",
+          "taskClassPrior": {
+            "research": 8
+          },
+          "command": "codex -p orca-worker --model 'kimi/k3[1m]' -c model_reasoning_effort=\"low\""
+        },
+        {
+          "id": "kimi/k3[1m]",
+          "role": "reviewer",
+          "effort": "high",
+          "quality": 20,
+          "harness": "codex",
+          "taskClassPrior": {},
+          "command": "codex -p orca-analyst --model 'kimi/k3[1m]' -c model_reasoning_effort=\"high\""
+        }
+      ]
+    },
+    {
+      "id": "zai",
+      "family": "zai",
+      "quotaKey": "zai",
+      "enabled": true,
+      "weeklyReservePercent": 5,
+      "models": [
+        {
+          "id": "zai/glm-5.2",
+          "role": "developer",
+          "effort": "medium",
+          "quality": 88,
+          "harness": "codex",
+          "taskClassPrior": {
+            "targeted_implementation": 8,
+            "frontend": 8,
+            "architecture": 6,
+            "docs_config": 4
+          },
+          "command": "codex -p orca-worker --model zai/glm-5.2 -c model_reasoning_effort=\"medium\""
+        },
+        {
+          "id": "zai/glm-5.2",
+          "role": "reviewer",
+          "effort": "high",
+          "quality": 72,
+          "harness": "codex",
+          "taskClassPrior": {},
+          "command": "codex -p orca-analyst --model zai/glm-5.2 -c model_reasoning_effort=\"high\""
+        }
+      ]
+    },
+    {
+      "id": "openai",
+      "family": "openai",
+      "quotaKey": "openai",
+      "enabled": true,
+      "weeklyReservePercent": 20,
+      "models": [
+        {
+          "id": "gpt-5.6-terra",
+          "role": "developer",
+          "effort": "high",
+          "quality": 86,
+          "harness": "codex",
+          "taskClassPrior": {
+            "security": 4,
+            "concurrency": 4,
+            "bugfix": 3
+          },
+          "command": "codex -p orca-worker --model gpt-5.6-terra -c model_reasoning_effort=\"high\""
+        },
+        {
+          "id": "gpt-5.6-sol",
+          "role": "reviewer",
+          "effort": "medium",
+          "quality": 98,
+          "harness": "codex",
+          "taskClassPrior": {
+            "security": 5,
+            "concurrency": 5,
+            "architecture": 3
+          },
+          "command": "codex -p orca-analyst --model gpt-5.6-sol -c model_reasoning_effort=\"medium\""
+        }
+      ]
+    },
+    {
+      "id": "anthropic",
+      "family": "anthropic",
+      "quotaKey": "anthropic",
+      "enabled": true,
+      "weeklyReservePercent": 15,
+      "models": [
+        {
+          "id": "opus",
+          "role": "developer",
+          "effort": "medium",
+          "quality": 97,
+          "harness": "claude-code",
+          "taskClassPrior": {
+            "architecture": 5,
+            "frontend": 4,
+            "research": 2
+          },
+          "experimental": true,
+          "experimentSharePercent": 20,
+          "reviewerFamilyAllowlist": ["openai"],
+          "command": "claude --model opus --effort medium --dangerously-skip-permissions"
+        },
+        {
+          "id": "opus",
+          "role": "reviewer",
+          "effort": "medium",
+          "quality": 97,
+          "harness": "claude-code",
+          "taskClassPrior": {
+            "architecture": 3,
+            "frontend": 3
+          },
+          "command": "claude --model opus --effort medium --dangerously-skip-permissions"
+        }
+      ]
+    }
+  ]
+}
