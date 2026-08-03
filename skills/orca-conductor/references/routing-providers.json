@@ -85,6 +85,25 @@
           "command": "codex -p orca-worker --model gpt-5.6-luna -c model_reasoning_effort=\"xhigh\""
         },
         {
+          "id": "gpt-5.6-luna",
+          "role": "developer",
+          "effort": "max",
+          "quality": 86,
+          "harness": "codex",
+          "taskClassPrior": {
+            "research": 8,
+            "docs_config": 8,
+            "qa": 7,
+            "targeted_implementation": 4,
+            "security": -6,
+            "concurrency": -6
+          },
+          "experimental": true,
+          "experimentSharePercent": 10,
+          "reviewerFamilyAllowlist": ["anthropic"],
+          "command": "codex -p orca-worker --model gpt-5.6-luna -c model_reasoning_effort=\"max\""
+        },
+        {
           "id": "gpt-5.6-terra",
           "role": "developer",
           "effort": "high",
@@ -96,6 +115,21 @@
             "bugfix": 3
           },
           "command": "codex -p orca-worker --model gpt-5.6-terra -c model_reasoning_effort=\"high\""
+        },
+        {
+          "id": "gpt-5.6-luna",
+          "role": "reviewer",
+          "effort": "max",
+          "quality": 96,
+          "harness": "codex",
+          "taskClassPrior": {
+            "research": 4,
+            "docs_config": 4,
+            "qa": 3,
+            "security": -6,
+            "concurrency": -6
+          },
+          "command": "codex -p orca-analyst --model gpt-5.6-luna -c model_reasoning_effort=\"max\""
         },
         {
           "id": "gpt-5.6-sol",
