@@ -85,7 +85,7 @@
 
 ## 강도 운용 원칙 (2026-07-20 kyle v4)
 
-**기본 구현은 Low/medium으로 빠르게 돌리고, 검수는 sol-medium 고정한다. Luna는 2026-07-31 가격 인하와 DeepSWE 고강도 성능을 근거로 구현 xhigh를 제한적 실제 탐색 후보로 다시 연다. 중계·순찰은 high를 기본으로 쓴다. max는 과거 내부 실측에서 서브에이전트 폭주·정체가 있었으므로 자동 기본값으로 쓰지 않고 별도 카드에서만 재검증한다.** terra 구현은 medium/high 2단을 유지한다.
+**기본 구현은 Low/medium으로 빠르게 돌리고, 검수는 sol-medium을 기본 품질 기준으로 둔다. Luna는 2026-07-31 가격 인하와 DeepSWE 고강도 성능을 근거로 구현 xhigh를 제한적 실제 탐색 후보로 다시 연다. 중계·순찰은 high를 기본으로 쓴다. Luna max는 2026-08-03 kyle 결정으로 동적 라우터에 다시 등록하되, 과거 서브에이전트 폭주·정체 위험 때문에 개발자는 안전한 카드의 10% 실험 슬롯, 검수자는 Sol·Opus보다 낮은 폴백 후보로만 사용한다.** terra 구현은 medium/high 2단을 유지한다.
 
 ## 2층 — 역할 편성표
 
@@ -101,7 +101,7 @@
 
 **모델·하네스 등록 계약 (2026-07-31 kyle 결정)**: 모델은 `provider + model id + role + effort + harness` 조합으로 식별한다. `routing-providers.json`의 모든 모델은 `harness`와 `taskClassPrior`를 명시한다. 현재 하네스 값은 `codex`, `claude-code`이며 이후 `kiro`, `gjc`, `lm-studio` 같은 연결기를 같은 필드에 추가한다. 새 값은 먼저 그림자 기록으로만 평가하고, 실행 명령·상태 확인·사용량 수집·중단 계약이 검증되기 전에는 실제 후보로 켜지 않는다. 로컬 모델은 자동 탐색하지 않으며 LM Studio 연결기를 명시적으로 등록한 경우만 후보가 된다.
 
-**Luna 고강도 재편입 (2026-07-31 kyle 결정)**: Datacurve DeepSWE v1.1 공식 리더보드의 `gpt-5.6-luna[max]`는 67%±4%, 평균 비용 $0.61, 출력 73k, 102 steps로 보고됐다. 이 외부 수치는 모델 선택의 출발 가설일 뿐 우리 하네스 실적은 아니므로, 자동 기본 편성은 `luna-xhigh` 품질 84의 임시값으로 등록하고 `research`·`docs_config`·`qa` 가산점, `security`·`concurrency` 감점을 그림자 기록에 둔다. 안전한 카드의 제한적 탐색으로 실제 첫 합격률·왕복·시간·사용량을 모은 뒤 품질값과 실제 선택 승격 여부를 다시 정한다. 출처: https://deepswe.datacurve.ai/
+**Luna 고강도 재편입 (2026-07-31 시작, 2026-08-03 max 후보 추가 kyle 결정)**: Datacurve DeepSWE v1.1 공식 리더보드의 `gpt-5.6-luna[max]`는 67%±4%, 평균 비용 $0.61, 출력 73k, 102 steps로 보고됐다. 이 외부 수치는 모델 선택의 출발 가설일 뿐 우리 하네스 실적은 아니므로, 자동 기본 편성은 `luna-xhigh` 품질 84의 임시값으로 유지한다. `luna-max` 개발자는 품질 86·10% 실험 슬롯·Anthropic 독립 검수 조건으로 등록하고, `luna-max` 검수자는 품질 96의 폴백 후보로 등록한다. 둘 다 `research`·`docs_config`·`qa` 가산점과 `security`·`concurrency` 감점을 두며, 실제 합격률·왕복·시간·사용량을 모은 뒤 품질값과 기본 선택 승격 여부를 다시 정한다. 출처: https://deepswe.datacurve.ai/
 
 **Opus 작업자 실험 (2026-07-25 kyle 결정)**: 복잡한 카드에서 Terra 대비 성과를 측정하기 위해 Opus medium을 실험 작업자로 등록한다. `--experiment-key '[판]:카드명'`처럼 같은 카드에서 변하지 않는 키를 반드시 넣으며, SHA-256 기반 고정 버킷의 20%에서만 Opus 작업자 후보가 열린다. 같은 키는 재실행해도 같은 군에 속하므로 라우터 재조회가 실험 비율을 왜곡하지 않는다. Opus 실험군의 검수자는 OpenAI 계열로 제한해 현재는 `Opus medium → Sol medium`만 허용한다. 키가 없거나 실험 슬롯 밖이거나 Anthropic 예약선을 침범하면 Opus 작업자는 닫히고 기존 후보를 다시 점수화한다. `reasons`의 `experiment_bucket`, `experiment_share`와 기존 `.orca/routing-events/<판>.jsonl` 결과를 함께 기록해 첫 합격률·왕복·시간·사용량을 비교한다.
 
@@ -188,7 +188,7 @@ curl -s http://127.0.0.1:10100/api/provider-quotas \
 당일 실측으로 이미 확정 (별도 테스트 불필요):
 
 - `codex-luna-high` (조사): 원인 추적 1방 정답 — 합격 (2026-07-19)
-- `codex-luna-max` (구현·검수): 작동은 하나 구현은 race 놓침 4라운드, 검수는 서브에이전트 폭주·정체 — **max 강도 비권장 판정** (2026-07-19)
+- `codex-luna-max` (구현·검수): 작동은 하나 구현은 race 놓침 4라운드, 검수는 서브에이전트 폭주·정체 이력이 있다. **2026-08-03 kyle 결정으로 개발 10% 실험·검수 폴백 후보에 한정해 재등록**했으며, 기본 승격 전 새 실측이 필요하다.
 
 ## 구 프리셋 ID 대응표 (다른 문서·기억이 옛 ID를 참조할 때)
 
