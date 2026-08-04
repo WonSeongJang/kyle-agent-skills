@@ -592,6 +592,25 @@ def test_opus_developer_runs_three_guarded_effort_tiers() -> None:
         assert f"--effort {model.effort}" in model.command
 
 
+def test_kimi_max_reviewer_is_a_guarded_experiment() -> None:
+    router = load_router()
+    config = router.RoutingConfig.model_validate_json(CONFIG.read_text())
+    kimi_reviewers = [
+        model
+        for provider in config.providers
+        if provider.id == "kimi"
+        for model in provider.models
+        if model.role is router.Role.REVIEWER
+    ]
+    baseline = next(model for model in kimi_reviewers if model.effort == "high")
+    kimi_max = next(model for model in kimi_reviewers if model.effort == "max")
+    assert baseline.experimental is False
+    assert kimi_max.experimental is True
+    assert kimi_max.experiment_share_percent == 20
+    assert kimi_max.quality > baseline.quality
+    assert 'model_reasoning_effort="max"' in kimi_max.command
+
+
 def test_glm_and_kimi_max_developer_experiments_require_strong_reviewer() -> None:
     router = load_router()
     config = router.RoutingConfig.model_validate_json(CONFIG.read_text())

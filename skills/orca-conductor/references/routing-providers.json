@@ -40,6 +40,17 @@
           "harness": "codex",
           "taskClassPrior": {},
           "command": "codex -p orca-analyst --model 'kimi/k3[1m]' -c model_reasoning_effort=\"high\""
+        },
+        {
+          "id": "kimi/k3[1m]",
+          "role": "reviewer",
+          "effort": "max",
+          "quality": 22,
+          "harness": "codex",
+          "taskClassPrior": {},
+          "experimental": true,
+          "experimentSharePercent": 20,
+          "command": "codex -p orca-analyst --model 'kimi/k3[1m]' -c model_reasoning_effort=\"max\""
         }
       ]
     },
