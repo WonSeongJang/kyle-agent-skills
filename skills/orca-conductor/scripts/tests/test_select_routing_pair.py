@@ -5,6 +5,7 @@ import json
 import sys
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 SCRIPT = Path(__file__).parents[1] / "select_routing_pair.py"
 CONFIG = Path(__file__).parents[2] / "references" / "routing-providers.json"
@@ -369,6 +370,136 @@ def test_opus_experiment_is_closed_outside_twenty_percent_slot() -> None:
     )
 
     assert decision.developer.model == "gpt-5.6-terra"
+
+
+def sol_reviewer_entries(router: ModuleType) -> list[Any]:
+    config = router.RoutingConfig.model_validate_json(CONFIG.read_text())
+    return [
+        model
+        for provider in config.providers
+        if provider.id == "openai"
+        for model in provider.models
+        if model.id == "gpt-5.6-sol" and model.role is router.Role.REVIEWER
+    ]
+
+
+def test_experiment_bucket_is_independent_per_effort() -> None:
+    router = load_router()
+    entries = [model for model in sol_reviewer_entries(router) if model.experimental]
+    assert len(entries) == 3
+    assert any(
+        len({router.experiment_bucket(model, f"card-{index}") for model in entries}) > 1
+        for index in range(100)
+    )
+
+
+def test_reviewer_experiment_gate_keeps_medium_baseline_without_key() -> None:
+    router = load_router()
+    decision = router.select_pair(
+        router.SelectionRequest(
+            config_path=CONFIG,
+            quota_json=quotas(kimi_weekly=20, openai_weekly=20),
+            task_size=router.TaskSize.HEAVY,
+            unavailable_providers=frozenset({"zai", "anthropic"}),
+            now_ms=1_784_877_896_945,
+        )
+    )
+    assert decision.reviewer.model == "gpt-5.6-sol"
+    assert decision.reviewer.effort == "medium"
+
+
+def test_reviewer_experiment_slot_prefers_highest_active_effort() -> None:
+    router = load_router()
+    entries = [model for model in sol_reviewer_entries(router) if model.experimental]
+    key, active = next(
+        (f"sol-{index}", active)
+        for index in range(1_000)
+        for active in [
+            [
+                model
+                for model in entries
+                if router.experiment_bucket(model, f"sol-{index}")
+                < model.experiment_share_percent
+            ]
+        ]
+        if active
+    )
+    expected = max(active, key=lambda model: model.quality)
+    decision = router.select_pair(
+        router.SelectionRequest(
+            config_path=CONFIG,
+            quota_json=quotas(kimi_weekly=20, openai_weekly=20),
+            task_size=router.TaskSize.HEAVY,
+            unavailable_providers=frozenset({"zai", "anthropic"}),
+            now_ms=1_784_877_896_945,
+            experiment_key=key,
+        )
+    )
+    assert decision.reviewer.model == "gpt-5.6-sol"
+    assert decision.reviewer.effort == expected.effort
+    assert "reviewer_experiment_share=20" in decision.reasons
+
+
+def test_reviewer_experiment_closed_slot_falls_back_to_medium() -> None:
+    router = load_router()
+    entries = [model for model in sol_reviewer_entries(router) if model.experimental]
+    key = next(
+        f"sol-{index}"
+        for index in range(1_000)
+        if all(
+            router.experiment_bucket(model, f"sol-{index}")
+            >= model.experiment_share_percent
+            for model in entries
+        )
+    )
+    decision = router.select_pair(
+        router.SelectionRequest(
+            config_path=CONFIG,
+            quota_json=quotas(kimi_weekly=20, openai_weekly=20),
+            task_size=router.TaskSize.HEAVY,
+            unavailable_providers=frozenset({"zai", "anthropic"}),
+            now_ms=1_784_877_896_945,
+            experiment_key=key,
+        )
+    )
+    assert decision.reviewer.model == "gpt-5.6-sol"
+    assert decision.reviewer.effort == "medium"
+
+
+def test_fable_reviewer_entries_are_guarded_experiments() -> None:
+    router = load_router()
+    config = router.RoutingConfig.model_validate_json(CONFIG.read_text())
+    fable = [
+        model
+        for provider in config.providers
+        if provider.id == "anthropic"
+        for model in provider.models
+        if model.id == "fable"
+    ]
+    assert {model.effort for model in fable} == {"medium", "high", "xhigh"}
+    for model in fable:
+        assert model.role is router.Role.REVIEWER
+        assert model.experimental is True
+        assert model.experiment_share_percent == 10
+        assert f"--effort {model.effort}" in model.command
+
+
+def test_glm_and_kimi_max_developer_experiments_require_strong_reviewer() -> None:
+    router = load_router()
+    config = router.RoutingConfig.model_validate_json(CONFIG.read_text())
+    max_devs = [
+        model
+        for provider in config.providers
+        if provider.id in {"zai", "kimi"}
+        for model in provider.models
+        if model.role is router.Role.DEVELOPER and model.effort == "max"
+    ]
+    assert {model.id for model in max_devs} == {"zai/glm-5.2", "kimi/k3[1m]"}
+    for model in max_devs:
+        assert model.experimental is True
+        assert model.experiment_share_percent == 20
+        assert set(model.reviewer_family_allowlist) == {"openai", "anthropic"}
+        assert 'model_reasoning_effort="max"' in model.command
 
 
 def test_opus_experiment_respects_anthropic_quota_exhaustion() -> None:

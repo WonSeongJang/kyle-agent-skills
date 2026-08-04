@@ -233,12 +233,12 @@ def routed_model(provider: ProviderConfig, model: ModelConfig) -> RoutedModel:
 
 
 def experiment_bucket(model: ModelConfig, experiment_key: str) -> int:
-    digest = sha256(f"{model.id}\0{experiment_key}".encode()).digest()
+    digest = sha256(f"{model.id}\0{model.effort}\0{experiment_key}".encode()).digest()
     return int.from_bytes(digest[:8], "big") % 100
 
 
 def experiment_reasons(
-    model: ModelConfig, experiment_key: str | None
+    model: ModelConfig, experiment_key: str | None, prefix: str = ""
 ) -> tuple[str, ...] | None:
     if not model.experimental:
         return ()
@@ -248,8 +248,8 @@ def experiment_reasons(
     if bucket >= model.experiment_share_percent:
         return None
     return (
-        f"experiment_bucket={bucket}",
-        f"experiment_share={model.experiment_share_percent}",
+        f"{prefix}experiment_bucket={bucket}",
+        f"{prefix}experiment_share={model.experiment_share_percent}",
     )
 
 
@@ -326,6 +326,11 @@ def select_pair(request: SelectionRequest) -> RoutingDecision:
                 for review_model in (model for model in review_provider.models if model.role is Role.REVIEWER):
                     if dev_model.id == review_model.id:
                         continue
+                    review_experiment_reasons = experiment_reasons(
+                        review_model, request.experiment_key, prefix="reviewer_"
+                    )
+                    if review_experiment_reasons is None:
+                        continue
                     costs = {dev_provider.id: dev_cost, review_provider.id: review_cost}
                     if dev_provider.id == review_provider.id:
                         costs[dev_provider.id] = dev_cost + review_cost
@@ -361,6 +366,7 @@ def select_pair(request: SelectionRequest) -> RoutingDecision:
                             same_family=same_family,
                             reasons=(
                                 dev_experiment_reasons
+                                + review_experiment_reasons
                                 + dev_health.reasons
                                 + review_health.reasons
                             ),

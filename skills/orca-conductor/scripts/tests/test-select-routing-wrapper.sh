@@ -46,9 +46,10 @@ ROUTING_LEDGER_FILE="$EXPLORATION_LEDGER_FILE" "$WRAPPER" \
   --risk-assessment-complete \
   --exploration-share-percent 10 > "$QA_DIR/explored.json"
 
-jq -e '.developer.provider == "kimi"' "$QA_DIR/explored.json" >/dev/null
 jq -e '.exploration.selected == true and .exploration.base.developer.provider == "zai"' "$QA_DIR/explored.json" >/dev/null
-jq -e '.payload.exploration.chosen.developer.provider == "kimi"' "$EXPLORATION_LEDGER_FILE" >/dev/null
+jq -e '.exploration.chosen != .exploration.base' "$QA_DIR/explored.json" >/dev/null
+jq -e '.developer.model == .exploration.chosen.developer.model and .reviewer.model == .exploration.chosen.reviewer.model' "$QA_DIR/explored.json" >/dev/null
+jq -s -e '.[0].exploration.chosen == .[1].payload.exploration.chosen' "$QA_DIR/explored.json" "$EXPLORATION_LEDGER_FILE" >/dev/null
 jq -e '.payload.shadow.task_class == "frontend"' "$EXPLORATION_LEDGER_FILE" >/dev/null
 printf 'PASS routing wrapper applies an explicitly enabled safe exploration slot\n'
 
