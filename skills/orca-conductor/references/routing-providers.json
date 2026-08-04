@@ -45,7 +45,7 @@
           "id": "kimi/k3[1m]",
           "role": "reviewer",
           "effort": "max",
-          "quality": 22,
+          "quality": 75,
           "harness": "codex",
           "taskClassPrior": {},
           "experimental": true,

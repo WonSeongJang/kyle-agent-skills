@@ -611,6 +611,59 @@ def test_kimi_max_reviewer_is_a_guarded_experiment() -> None:
     assert 'model_reasoning_effort="max"' in kimi_max.command
 
 
+def test_kimi_max_review_wins_over_squeezed_sol_when_its_slot_opens() -> None:
+    router = load_router()
+    config = router.RoutingConfig.model_validate_json(CONFIG.read_text())
+    kimi_max = next(
+        model
+        for provider in config.providers
+        if provider.id == "kimi"
+        for model in provider.models
+        if model.role is router.Role.REVIEWER and model.effort == "max"
+    )
+    key = next(
+        f"kimi-max-{index}"
+        for index in range(1_000)
+        if router.experiment_bucket(kimi_max, f"kimi-max-{index}")
+        < kimi_max.experiment_share_percent
+    )
+    now_ms = 1_784_877_896_945
+    quota_json = json.dumps(
+        {
+            "generatedAt": now_ms,
+            "reports": [
+                {
+                    "provider": "kimi",
+                    "quota": {
+                        "weeklyPercent": 20,
+                        "weeklyResetAt": 1_785_121_301_935,
+                    },
+                },
+                {
+                    "provider": "openai",
+                    "quota": {
+                        "weeklyPercent": 84,
+                        "weeklyResetAt": 1_785_121_301_935,
+                    },
+                },
+            ],
+        }
+    )
+    decision = router.select_pair(
+        router.SelectionRequest(
+            config_path=CONFIG,
+            quota_json=quota_json,
+            task_size=router.TaskSize.HEAVY,
+            unavailable_providers=frozenset({"anthropic"}),
+            now_ms=now_ms,
+            experiment_key=key,
+        )
+    )
+    assert decision.reviewer.model == "kimi/k3[1m]"
+    assert decision.reviewer.effort == "max"
+    assert decision.last_resort is False
+
+
 def test_glm_and_kimi_max_developer_experiments_require_strong_reviewer() -> None:
     router = load_router()
     config = router.RoutingConfig.model_validate_json(CONFIG.read_text())
