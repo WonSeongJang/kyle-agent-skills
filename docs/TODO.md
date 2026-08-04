@@ -87,3 +87,11 @@ bash scripts/validate.sh
 - [ ] Orca가 `taskId+dispatchId+runId+role roster pane`을 권위 정보로 제공하고, `orca-conductor`는 모델 선택 이유와 검수 판정 같은 보충 정보만 추가하는 책임 분리를 검토한다.
 - [ ] Orca DB를 권위 원장으로 정할 경우 JSONL은 내보내기·분석용 파생물로 두고, DB와 JSONL의 중복·순서·재시작 복구 계약을 명시한다.
 - [ ] 위 계약은 별도 설계 카드와 독립 검수로 확정한다. 현재 Luna 라우팅 변경과 섞어 구현하지 않는다.
+
+## 2026-08-04 — "임명장이 스킬 표준 절차를 덮는" 재발 방지 (kyle 지시, 슈퍼감독 기록)
+
+배경: upstream-sync-1 판 개설 때 임명장의 좁은 "첫 행동 4단계" 목록이 mechanics.md의 "중계기 편성은 예외 없이 항상" 표준을 덮어 relay 미편성 → 발령 누락 정체 2회를 kyle이 육안 발견. 방향: 규칙 문장 누적이 아니라 절차의 코드·장부 이동.
+
+- [ ] companion 개설 완결성 대조 1건 추가: 개시 선언(status) 배달 시 해당 board의 relay roster active 행이 없으면 `MISSING_RELAY` 진단을 감독에게 1회 깨움 (present/absent 결정적 대조 — 추측 판정 아님. 기존 upper report 누락 감지 패턴의 일반화).
+- [ ] companion kicker 장부 대조 NUDGE (기존 항목과 통합 검토): ready 카드 present + active dispatch absent + coordinator idle → 감독 깨움. 오늘 정체 2회의 직접 방어막.
+- [ ] `board-bootstrap.sh` 신설: 판 개설 기계 단계 일괄 실행 — Run 생성 → 감독 스폰+roster 대조 → companion 기동 → 중계기 스폰+roster 대조+kicker → 결과 JSON 리포트. 임명장에는 임무·헌법·금지선만 남긴다. 완성 전까지는 임명장 고정 6단계(super-conductor incident-log 2026-08-04 박제)가 임시 방어막.
