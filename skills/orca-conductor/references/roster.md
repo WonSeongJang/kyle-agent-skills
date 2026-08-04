@@ -44,7 +44,7 @@
 | `gjc-glm-<eco|medium|pro>` | `gjc --mpreset glm-<eco|medium|pro>` (필요 시 `--thinking` 병용) | 프리셋 3단이 곧 effort 단계 | **비상 대안 (2026-07-21 kyle — codex-glm52로 이관, 프록시 다운 시만)**. glm-pro·glm-eco 검증됨(2026-07-20 기동 실측). **`--model glm-5.2` 금지(2026-07-20 실측): 퍼지 매칭이 API 키 없는 deepinfra 채널을 잡아 "No API key" 즉사** |
 | `gjc-codexpro` | `gjc --mpreset codex-pro` | (역할별 자동: DEFAULT sol:medium / EXECUTOR terra:medium / PLANNER sol:high / CRITIC sol:max / ARCHITECT sol:xhigh) | 검증됨 |
 | `claude-fable-<강도>` | `claude --model fable --effort <강도> --dangerously-skip-permissions` | low·medium·high·xhigh·max (2026-08-04 실측 — xhigh 기동 응답 확인, 무효값 `ultra`는 경고 후 무시되므로 무경고 통과 = 유효) | 검증됨 · **검수 최후 보루 자동 등록 (2026-08-04 kyle 결정)** — 라우터에 reviewer medium/high/xhigh를 `lastResortOnly`로 등록. 정상 조합이 전부 불능·예약선 침범일 때만 자동 선발되고, 평상시 점수 경쟁에는 안 들어감. 지휘자와 Anthropic 쿼터 공유 주의 |
-| `claude-opus5-<강도>` | `claude --model opus --effort <강도> --dangerously-skip-permissions` | low·medium·high·xhigh·max | **기동 검증됨 (2026-07-25 실측)** · 정식 검수 후보. 기본 강도 medium |
+| `claude-opus5-<강도>` | `claude --model opus --effort <강도> --dangerously-skip-permissions` | low·medium·high·xhigh·max | **기동 검증됨 (2026-07-25 실측)** · **검수 라우터 오프 (2026-08-04 kyle 결정)** — reviewer 항목 `enabled: false`, Anthropic 계열 검수는 fable이 맡는다. developer 실험(20%)은 유지 |
 | `opencode-glm52` | `opencode` (kyle 설정 기본 프로필 — 내부 모델 zai GLM 5.2, `~/.config/opencode/` 기준) | opencode 내부 설정 따름 | **보조 검수 전용 (2026-07-28 kyle 승인 등록)** — 실전 기동·검수 1회 검증(openapi-prod-prep 최종 독립 검수 PASS). 용도: sol 보안 필터 차단 시, codex 하네스 전체 불능 시, 실행자와 하네스까지 분리한 독립 검수가 필요할 때. **주의**: orca dispatch --inject 미검증 — 발령은 gjc식 수동 배달 절차 사용. 라우터(routing-providers.json) 미등록 — 수동 편성 전용. 쿼터는 zai(glm) 계열 공유 |
 | `kimi` | `kimi --yolo` | Low·High·Max — 단 기동 플래그 없음, TUI 내 선택(발령 전 설정, 캐시 무효화 주의) | **비상 대안 (2026-07-21 kyle — codex-kimi1m으로 이관, 프록시 다운 시만)**. 검증됨 |
 
@@ -160,9 +160,9 @@ curl -s http://127.0.0.1:10100/api/provider-quotas \
 
 ### 검수 엔진 — 동적 선택, Sol·Opus 5 품질 기준
 
-기본 품질 기준은 `codex-sol-medium`이며 검수 강도 medium 고정이다(LIGHT/HEAVY 공통 — 무게별 합격 기준·재검수 범위 규칙은 `tiki-taka.md`). `claude-opus5-medium`은 Anthropic 독립 계열의 고급 검수 후보로 함께 점수화한다. Sol과 Terra는 같은 OpenAI 계열이므로 Terra→Sol은 독립 검수보다 감점되지만 금지하지 않으며, Opus 5는 Kimi·GLM·OpenAI 작업물의 저자 계열을 분리할 때 우선 가치가 있다. 실제 편성은 선택기가 현재 쿼터와 작업자 계열을 함께 보고 정한다.
+기본 품질 기준은 `codex-sol-medium`이며(단 2026-08-04부터 high/xhigh/max 상향 실험 각 20% 병행 — 원장 effort 필드로 A/B), 무게별 합격 기준·재검수 범위 규칙은 `tiki-taka.md`. **Anthropic 계열 검수는 opus가 아니라 fable이 맡는다 (2026-08-04 kyle 결정)** — opus reviewer 항목은 `enabled: false`로 꺼져 있고, fable은 `lastResortOnly`라 평상시엔 안 뽑히며 정상 조합이 전부 불능·예약선 침범일 때만 자동 선발된다. Sol과 Terra는 같은 OpenAI 계열이므로 같은 계열 조합은 감점되지만 금지하지 않는다. 실제 편성은 선택기가 현재 쿼터와 작업자 계열을 함께 보고 정한다.
 
-- **Fable 검수 최후 보루 자동 등록 (2026-08-04 kyle 결정)**: `claude-fable-medium/high/xhigh`가 `routing-providers.json`에 `lastResortOnly` 검수자로 등록됐다. 평상시 점수 경쟁에는 들어가지 않고, 정상 조합이 전부 불능·예약선 침범(last_resort)일 때만 선발된다 — 이때는 등록 강도 중 품질 점수가 가장 높은 단(현재 xhigh)이 뽑힌다. 결과가 계속 막히는 카드에 사람이 수동으로 fable을 고르는 최후 보루 규칙도 그대로 유지한다.
+- **Fable 검수 최후 보루 자동 등록 (2026-08-04 kyle 결정)**: `claude-fable-medium/high/xhigh`가 `routing-providers.json`에 `lastResortOnly` 검수자로 등록됐다. 평상시 점수 경쟁에는 들어가지 않고, 정상 조합이 전부 불능·예약선 침범(last_resort)일 때만 선발된다 — 이때는 등록 강도 중 품질 점수가 가장 높은 단(현재 xhigh)이 뽑힌다. **정말 안 풀리는 카드에는 지휘자가 fable을 수동 편성해도 된다 (2026-08-04 kyle 승인)** — 라운드가 반복 실패하는 막힌 카드의 검수 승급 용도이며, 강도는 막힘 정도에 따라 medium/high/xhigh 중 고른다. 이 수동 경로는 `lastResortOnly` 자동 선발 조건과 별개다.
 - **독립 계열 우선, 같은 계열 허용**: 선택기는 작업자와 검수자 provider가 다르면 가산하고, 같으면 감점한다. 하지만 Terra→Sol처럼 같은 계열 조합을 금지하지 않는다. 모든 독립 계열 조합이 불능·예약선 침범이면 같은 계열 조합도 선택한다.
 - **폴백 검수의 저자 분리 원칙 (2026-07-21 kyle 결정)**: 폴백 검수 모델은 **검수 대상 라운드의 구현 모델과 겹치지 않게** 고른다 — 대상이 kimi 작업물이면 검수는 `claude-fable-medium`, glm 작업물이면 `codex-kimi1m-high`. 사유: "검수가 kimi로 전환되는 그 라운드"는 직전 구현이 이미 kimi인 과도기라 자기 검수(맹점 겹침 최대)가 생기는데, 이 케이스는 드물어 fable 소모가 미미하므로 fable 아끼기 방침과 충돌 없이 분리를 산다.
 - **fable 과도기는 정확히 1라운드 (2026-07-21 kyle 명시 — 실사고 기반)**: Fable 비상 검수는 "이미 만들어진 작업물"을 검수하는 그 한 라운드에만 쓴다. 다음 수정 라운드는 선택기를 다시 실행해 등록된 정상 조합으로 복귀한다. 맥락은 터미널 머리가 아니라 카드의 발견 전문에 있으므로 Fable 편성을 반복 유지하지 않는다.

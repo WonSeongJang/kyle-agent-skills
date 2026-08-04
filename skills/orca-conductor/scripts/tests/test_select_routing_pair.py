@@ -492,7 +492,7 @@ def test_fable_reviewer_is_selected_only_as_last_resort() -> None:
     router = load_router()
     now_ms = 1_784_877_896_945
 
-    def decide(anthropic_weekly: float) -> Any:
+    def decide(openai_weekly: float) -> Any:
         quota_json = json.dumps(
             {
                 "generatedAt": now_ms,
@@ -505,9 +505,16 @@ def test_fable_reviewer_is_selected_only_as_last_resort() -> None:
                         },
                     },
                     {
+                        "provider": "openai",
+                        "quota": {
+                            "weeklyPercent": openai_weekly,
+                            "weeklyResetAt": 1_785_121_301_935,
+                        },
+                    },
+                    {
                         "provider": "anthropic",
                         "quota": {
-                            "weeklyPercent": anthropic_weekly,
+                            "weeklyPercent": 20,
                             "weeklyResetAt": 1_785_121_301_935,
                         },
                     },
@@ -519,16 +526,16 @@ def test_fable_reviewer_is_selected_only_as_last_resort() -> None:
                 config_path=CONFIG,
                 quota_json=quota_json,
                 task_size=router.TaskSize.HEAVY,
-                unavailable_providers=frozenset({"zai", "openai"}),
+                unavailable_providers=frozenset({"zai"}),
                 now_ms=now_ms,
             )
         )
 
-    healthy = decide(20)
-    assert healthy.reviewer.model == "opus"
+    healthy = decide(openai_weekly=20)
+    assert healthy.reviewer.model == "gpt-5.6-sol"
     assert healthy.last_resort is False
 
-    squeezed = decide(84)
+    squeezed = decide(openai_weekly=84)
     assert squeezed.reviewer.model == "fable"
     assert squeezed.reviewer.effort == "xhigh"
     assert squeezed.last_resort is True
@@ -559,6 +566,7 @@ def test_disabled_model_stays_registered_but_is_never_routed() -> None:
         "gpt-5.6-terra" not in {pair.developer.model, pair.reviewer.model}
         for pair in decision.ranked_pairs
     )
+    assert all(pair.reviewer.model != "opus" for pair in decision.ranked_pairs)
 
 
 def test_glm_and_kimi_max_developer_experiments_require_strong_reviewer() -> None:

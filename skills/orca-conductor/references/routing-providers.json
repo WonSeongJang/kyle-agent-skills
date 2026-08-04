@@ -262,6 +262,7 @@
           "role": "reviewer",
           "effort": "medium",
           "quality": 97,
+          "enabled": false,
           "harness": "claude-code",
           "taskClassPrior": {
             "architecture": 3,
