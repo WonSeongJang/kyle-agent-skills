@@ -269,6 +269,25 @@ def test_stale_rottie_provider_does_not_override_fallback() -> None:
     assert by_provider["openai"].quota.weekly_used == 58
 
 
+def test_missing_quota_sources_degrade_to_unknown_instead_of_failing() -> None:
+    router = load_router()
+    now_ms = 1_784_877_896_945
+
+    merged = router.merge_quota_sources(None, None, now_ms)
+    assert merged.reports == ()
+
+    decision = router.select_pair(
+        router.SelectionRequest(
+            config_path=CONFIG,
+            quota_json=merged.model_dump_json(by_alias=True),
+            task_size=router.TaskSize.HEAVY,
+            unavailable_providers=frozenset(),
+            now_ms=now_ms,
+        )
+    )
+    assert any(reason == "quota_unknown" for reason in decision.reasons)
+
+
 def experiment_key(router: ModuleType, enabled: bool) -> str:
     config = router.RoutingConfig.model_validate_json(CONFIG.read_text())
     opus = next(

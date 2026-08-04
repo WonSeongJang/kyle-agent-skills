@@ -265,8 +265,10 @@ def merge_quota_sources(
             age_ms = now_ms - observed_at
             if 0 <= age_ms <= ROTTIE_FRESHNESS_MS:
                 reports[report.provider] = report
-    if not reports:
-        raise RoutingError("No quota source is available")
+    # 사용량 공급원이 모두 끊겨도 편성 자체는 멈추지 않는다. 빈 응답은
+    # select_pair()에서 각 provider를 quota_unknown으로 처리하게 하며,
+    # 선택 결과의 reasons에 경고가 남는다. 실제 소진 여부를 모르는 상태를
+    # "충분하다"고 판정하지 않도록 점수는 중립값만 부여한다.
     return QuotaResponse(
         generatedAt=max(
             fallback.generated_at if fallback else 0,
