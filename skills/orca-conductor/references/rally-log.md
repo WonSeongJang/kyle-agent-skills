@@ -317,3 +317,14 @@
 - 결과: dev PM2 임시 다중 작업자에서 동시 15건이 정확히 200 10건·429 5건이었고 원래 1개로 복구했다. 운영에는 96자 CSPRNG 서명 비밀을 원문 비기록으로 주입하고 migration 5개를 순서대로 적용했다. PR #85·#86을 일반 머지하고 main `053cd1e6f258b0ff9a252f7e83aea8e1d8568296`을 배포했다. 운영 PM2 2/2 online, 로컬·공개 health 200, 최종 QA 200 10건·429 5건, 두 작업자 CPU 증가, 로그 평문 0건, 폐기 후 401, 활성 QA 세션 0건을 확인했다.
 - 전환 이벤트: 인터넷 단절 뒤 전 작업자·중계기·companion 생존을 점검해 재개했다. 운영 QA 1차는 9/6, 2차는 작업자 분산 증거 부족, 3차는 정확한 10/5와 두 작업자 사용 증거로 수렴했다. `DISPATCH_FAILED` 2회는 터미널 이상이 아니라 카드가 `pending`이었던 것이 원인이었다. 복구 국면에도 라우터와 roster만 쓰도록 mechanics 규칙을 보강했다.
 - 결말: 치명 0·중요 0·사소 1 PASS. 최종 증거는 `/tmp/orca-evidence/openapi-prod-prep/final-review/report.md`. routing events는 `.orca/routing-events/openapi-prod-prep.jsonl`에 남았고, 자동 선택 기록 누락과 미등록 opencode 편성은 비준수로 별도 보고했다. 판 종료 때 전용 워크트리·브랜치·터미널·자식 프로세스를 정리했다.
+
+### 2026-08-04 [판:upstream-sync-1] upstream 전체 동기화·운영 앱 교체·roster rebind 첫 실전
+
+- 성격: upstream 대규모 병합, 충돌 13건, 전체 시험 실패 분류, macOS 로컬 빌드·실기동 E2E, 운영 앱 교체, role-roster 수명주기 · HEAVY · 지휘: gpt-5.6-sol 프로젝트 감독.
+- 본선 결과: upstream/main `a6b14eb04`을 bootstrap에 병합해 충돌 13건을 해소했고, 최종 체크포인트 계보는 운영 앱 교체 빌드 `4cf749aaab07`까지 이어졌다. 시험 실패는 10범주, 35 test + unhandled 1로 분류했다. Node 24, macOS Bash 3.2, ad-hoc 서명/TCC, ambient `GIT_CONFIG_COUNT`를 다음 랠리의 고정 환경 관문으로 남겼다.
+- 운영 교체: 구 PID 43323에서 신 PID 62007로 교체했고 appVersion `1.4.168-rc.1.local.1785831912638.4cf749aaab07`, runtime ready, userData 불변을 확인했다. 교체 스크립트의 `RESULT: FAIL`은 60초 대기 부족으로 생긴 오판이었으며 후속 실측으로 PASS 정정했다.
+- roster 첫 실전: 새 공식 동사 `roster rebind`로 project-supervisor `roster_b93ae3c47e7b`와 relay `roster_e2c3e64c4e24`를 새 pane에 옮기고 receipt가 아니라 `list/show/resolve` 장부로 검증했다. `terminal create --role` 성공 receipt와 실제 등록 결과가 어긋나는 결함 A를 재현했고, Kimi K3 1M max 구현 → Sol medium 독립 검수 1라운드 PASS로 `f5de48c11`을 만들었다.
+- 감시 복구: relay를 Luna high `orca-lean`으로 복구하고 실제 순찰 로그 append와 `RELAY_SUCCESSOR_READY`를 확인했다. 옛 kicker PID 69328은 정확 PID만 종료하고 새 PID 23542, PPID 1로 재기동했다. companion은 여러 실패를 겪은 뒤 launchd PID 63293, PPID 1로 복구했으며 보호 대상 전임 감독 PID 2927은 건드리지 않았다.
+- 플레이북 랠리: GLM medium 문서 작업 → Sol medium 검수. R1은 정책 충돌 등 critical 1·major 4·minor 1 FAIL, R2는 월간 병합 원본과 방향 개수 major 1·minor 1 FAIL, R3는 critical·major·minor 0 PASS로 수렴했다. 체크포인트 `4d7f26948`은 `docs/upstream-sync-playbook.md`를 처음 Git 추적하고 maintenance 양방향 링크를 함께 넣었다.
+- 사고와 교훈: 미추적 살아있는 플레이북을 작업자가 전면 교체하다 삭제해 Git 복구가 불가능했고, 셸 전체 쓰기로 복원했다. 살아있는 플레이북은 생성 직후 Git 추적·커밋한다. 독립 검수자가 `git write-tree`를 읽기 전용 확인에 사용한 일과 FAIL 본문에 `outcome=succeeded`를 보낸 lifecycle 불일치도 있었으므로, 검수 spec에는 객체 생성 금지와 본문 판정·outcome 일치 조건을 명시한다. worker의 긴 전체 파일 재작성보다 좁은 patch를 강제한다.
+- 결말: 결함 A 소스 체크포인트 `f5de48c11`, 판 마감 문서 체크포인트 `4d7f26948`. Computer Use, terminal close receipt, 버전 표시, 세션 GC는 ready로 보존하고 이번 판에서 발령하지 않았다.
