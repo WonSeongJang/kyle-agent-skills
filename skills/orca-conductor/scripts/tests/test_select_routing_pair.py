@@ -62,7 +62,7 @@ def test_kimi_sol_when_glm_is_unavailable() -> None:
     assert decision.reviewer.provider == "openai"
 
 
-def test_terra_sol_only_after_kimi_reserve_would_be_breached() -> None:
+def test_luna_takes_over_when_kimi_is_exhausted_and_terra_is_disabled() -> None:
     router = load_router()
     decision = router.select_pair(
         router.SelectionRequest(
@@ -73,9 +73,12 @@ def test_terra_sol_only_after_kimi_reserve_would_be_breached() -> None:
             now_ms=1_784_877_896_945,
         )
     )
-    assert decision.developer.model == "gpt-5.6-terra"
+    assert decision.developer.model == "gpt-5.6-luna"
     assert decision.reviewer.model == "gpt-5.6-sol"
     assert decision.same_family is True
+    assert all(
+        pair.developer.model != "gpt-5.6-terra" for pair in decision.ranked_pairs
+    )
 
 
 def test_new_provider_is_considered_without_code_changes(tmp_path: Path) -> None:
@@ -133,8 +136,8 @@ def test_same_model_never_reviews_itself() -> None:
         (pair.developer.model, pair.reviewer.model)
         for pair in decision.ranked_pairs
     ]
-    assert fallback_models.index(("gpt-5.6-terra", "gpt-5.6-sol")) < fallback_models.index(
-        ("gpt-5.6-terra", "kimi/k3[1m]")
+    assert fallback_models.index(("gpt-5.6-luna", "gpt-5.6-sol")) < fallback_models.index(
+        ("gpt-5.6-luna", "kimi/k3[1m]")
     )
 
 
@@ -369,7 +372,7 @@ def test_opus_experiment_is_closed_outside_twenty_percent_slot() -> None:
         )
     )
 
-    assert decision.developer.model == "gpt-5.6-terra"
+    assert decision.developer.model == "gpt-5.6-luna"
 
 
 def sol_reviewer_entries(router: ModuleType) -> list[Any]:
@@ -466,7 +469,7 @@ def test_reviewer_experiment_closed_slot_falls_back_to_medium() -> None:
     assert decision.reviewer.effort == "medium"
 
 
-def test_fable_reviewer_entries_are_guarded_experiments() -> None:
+def test_fable_reviewer_entries_are_last_resort_only() -> None:
     router = load_router()
     config = router.RoutingConfig.model_validate_json(CONFIG.read_text())
     fable = [
@@ -479,9 +482,83 @@ def test_fable_reviewer_entries_are_guarded_experiments() -> None:
     assert {model.effort for model in fable} == {"medium", "high", "xhigh"}
     for model in fable:
         assert model.role is router.Role.REVIEWER
-        assert model.experimental is True
-        assert model.experiment_share_percent == 10
+        assert model.enabled is True
+        assert model.last_resort_only is True
+        assert model.experimental is False
         assert f"--effort {model.effort}" in model.command
+
+
+def test_fable_reviewer_is_selected_only_as_last_resort() -> None:
+    router = load_router()
+    now_ms = 1_784_877_896_945
+
+    def decide(anthropic_weekly: float) -> Any:
+        quota_json = json.dumps(
+            {
+                "generatedAt": now_ms,
+                "reports": [
+                    {
+                        "provider": "kimi",
+                        "quota": {
+                            "weeklyPercent": 20,
+                            "weeklyResetAt": 1_785_121_301_935,
+                        },
+                    },
+                    {
+                        "provider": "anthropic",
+                        "quota": {
+                            "weeklyPercent": anthropic_weekly,
+                            "weeklyResetAt": 1_785_121_301_935,
+                        },
+                    },
+                ],
+            }
+        )
+        return router.select_pair(
+            router.SelectionRequest(
+                config_path=CONFIG,
+                quota_json=quota_json,
+                task_size=router.TaskSize.HEAVY,
+                unavailable_providers=frozenset({"zai", "openai"}),
+                now_ms=now_ms,
+            )
+        )
+
+    healthy = decide(20)
+    assert healthy.reviewer.model == "opus"
+    assert healthy.last_resort is False
+
+    squeezed = decide(84)
+    assert squeezed.reviewer.model == "fable"
+    assert squeezed.reviewer.effort == "xhigh"
+    assert squeezed.last_resort is True
+    assert "reviewer_model_last_resort" in squeezed.reasons
+
+
+def test_disabled_model_stays_registered_but_is_never_routed() -> None:
+    router = load_router()
+    config = router.RoutingConfig.model_validate_json(CONFIG.read_text())
+    terra = [
+        model
+        for provider in config.providers
+        for model in provider.models
+        if model.id == "gpt-5.6-terra"
+    ]
+    assert terra
+    assert all(model.enabled is False for model in terra)
+    decision = router.select_pair(
+        router.SelectionRequest(
+            config_path=CONFIG,
+            quota_json=quotas(kimi_weekly=20, openai_weekly=20),
+            task_size=router.TaskSize.HEAVY,
+            unavailable_providers=frozenset(),
+            now_ms=1_784_877_896_945,
+        )
+    )
+    assert all(
+        "gpt-5.6-terra" not in {pair.developer.model, pair.reviewer.model}
+        for pair in decision.ranked_pairs
+    )
 
 
 def test_glm_and_kimi_max_developer_experiments_require_strong_reviewer() -> None:
@@ -518,4 +595,4 @@ def test_opus_experiment_respects_anthropic_quota_exhaustion() -> None:
         )
     )
 
-    assert decision.developer.model == "gpt-5.6-terra"
+    assert decision.developer.model == "gpt-5.6-luna"

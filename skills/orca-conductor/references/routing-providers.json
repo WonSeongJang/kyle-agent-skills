@@ -150,6 +150,7 @@
           "role": "developer",
           "effort": "high",
           "quality": 86,
+          "enabled": false,
           "harness": "codex",
           "taskClassPrior": {
             "security": 4,
@@ -275,8 +276,7 @@
           "quality": 97,
           "harness": "claude-code",
           "taskClassPrior": {},
-          "experimental": true,
-          "experimentSharePercent": 10,
+          "lastResortOnly": true,
           "command": "claude --model fable --effort medium --dangerously-skip-permissions"
         },
         {
@@ -286,8 +286,7 @@
           "quality": 98,
           "harness": "claude-code",
           "taskClassPrior": {},
-          "experimental": true,
-          "experimentSharePercent": 10,
+          "lastResortOnly": true,
           "command": "claude --model fable --effort high --dangerously-skip-permissions"
         },
         {
@@ -297,8 +296,7 @@
           "quality": 99,
           "harness": "claude-code",
           "taskClassPrior": {},
-          "experimental": true,
-          "experimentSharePercent": 10,
+          "lastResortOnly": true,
           "command": "claude --model fable --effort xhigh --dangerously-skip-permissions"
         }
       ]

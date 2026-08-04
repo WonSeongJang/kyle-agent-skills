@@ -39,6 +39,8 @@ class ModelConfig(BaseModel):
     effort: str
     quality: float
     command: str
+    enabled: bool = True
+    last_resort_only: bool = Field(default=False, alias="lastResortOnly")
     experimental: bool = False
     experiment_share_percent: int = Field(
         default=100, alias="experimentSharePercent", ge=0, le=100
@@ -311,7 +313,11 @@ def select_pair(request: SelectionRequest) -> RoutingDecision:
     for dev_provider in providers:
         if dev_provider.id in request.unavailable_providers:
             continue
-        for dev_model in (model for model in dev_provider.models if model.role is Role.DEVELOPER):
+        for dev_model in (
+            model
+            for model in dev_provider.models
+            if model.role is Role.DEVELOPER and model.enabled
+        ):
             dev_experiment_reasons = experiment_reasons(dev_model, request.experiment_key)
             if dev_experiment_reasons is None:
                 continue
@@ -323,7 +329,11 @@ def select_pair(request: SelectionRequest) -> RoutingDecision:
                     and review_provider.family not in dev_model.reviewer_family_allowlist
                 ):
                     continue
-                for review_model in (model for model in review_provider.models if model.role is Role.REVIEWER):
+                for review_model in (
+                    model
+                    for model in review_provider.models
+                    if model.role is Role.REVIEWER and model.enabled
+                ):
                     if dev_model.id == review_model.id:
                         continue
                     review_experiment_reasons = experiment_reasons(
@@ -362,11 +372,18 @@ def select_pair(request: SelectionRequest) -> RoutingDecision:
                             developer=routed_model(dev_provider, dev_model),
                             reviewer=routed_model(review_provider, review_model),
                             score=round(score, 2),
-                            last_resort=dev_health.last_resort or review_health.last_resort,
+                            last_resort=(
+                                dev_health.last_resort
+                                or review_health.last_resort
+                                or dev_model.last_resort_only
+                                or review_model.last_resort_only
+                            ),
                             same_family=same_family,
                             reasons=(
                                 dev_experiment_reasons
                                 + review_experiment_reasons
+                                + (("developer_model_last_resort",) if dev_model.last_resort_only else ())
+                                + (("reviewer_model_last_resort",) if review_model.last_resort_only else ())
                                 + dev_health.reasons
                                 + review_health.reasons
                             ),
