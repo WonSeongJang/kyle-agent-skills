@@ -41,7 +41,7 @@ def test_luna_max_is_available_as_guarded_developer_and_reviewer() -> None:
 
     assert developer.experimental is True
     assert developer.experiment_share_percent == 10
-    assert developer.reviewer_family_allowlist == ("anthropic",)
+    assert developer.reviewer_family_allowlist == ("openai", "anthropic")
     assert 'model_reasoning_effort="max"' in developer.command
     assert reviewer.experimental is False
     assert reviewer.quality < 97

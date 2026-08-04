@@ -294,17 +294,21 @@ def test_missing_quota_sources_degrade_to_unknown_instead_of_failing() -> None:
 
 def experiment_key(router: ModuleType, enabled: bool) -> str:
     config = router.RoutingConfig.model_validate_json(CONFIG.read_text())
-    opus = next(
+    opus_devs = [
         model
         for provider in config.providers
         if provider.id == "anthropic"
         for model in provider.models
         if model.role is router.Role.DEVELOPER
-    )
+    ]
     return next(
         f"card-{index}"
         for index in range(1_000)
-        if (router.experiment_bucket(opus, f"card-{index}") < opus.experiment_share_percent)
+        if any(
+            router.experiment_bucket(model, f"card-{index}")
+            < model.experiment_share_percent
+            for model in opus_devs
+        )
         is enabled
     )
 
@@ -567,6 +571,25 @@ def test_disabled_model_stays_registered_but_is_never_routed() -> None:
         for pair in decision.ranked_pairs
     )
     assert all(pair.reviewer.model != "opus" for pair in decision.ranked_pairs)
+
+
+def test_opus_developer_runs_three_guarded_effort_tiers() -> None:
+    router = load_router()
+    config = router.RoutingConfig.model_validate_json(CONFIG.read_text())
+    opus_devs = [
+        model
+        for provider in config.providers
+        if provider.id == "anthropic"
+        for model in provider.models
+        if model.id == "opus" and model.role is router.Role.DEVELOPER
+    ]
+    assert {model.effort for model in opus_devs} == {"medium", "high", "xhigh"}
+    for model in opus_devs:
+        assert model.enabled is True
+        assert model.experimental is True
+        assert model.experiment_share_percent == 20
+        assert model.reviewer_family_allowlist == ("openai",)
+        assert f"--effort {model.effort}" in model.command
 
 
 def test_glm_and_kimi_max_developer_experiments_require_strong_reviewer() -> None:
