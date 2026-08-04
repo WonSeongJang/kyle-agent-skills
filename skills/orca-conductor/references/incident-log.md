@@ -317,3 +317,10 @@
 - 확인된 사실: 정상 상주 중이던 PID `66505`와 `78977`은 각각 업그레이드 지시에 따라 `kill -TERM`으로 명시적으로 종료됐다. 셸 종료 뒤 사라진 PID는 그 다음에 만든 짧은 `nohup` 교체 시도 `75417`, `84493`이었다.
 - 판정: 기존 감독 소유 상주 방식이 저절로 죽었다는 증거는 없다. HUP 무시 변경은 방어적 보완이지만 기존 companion 중단의 확정 원인은 아니다. 이후 정체는 별개로 (1) launchctl PATH 누락과 (2) Fable 렌더 화면 `BB` 붕괴 때문에 감지가 막힌 사건이다.
 - 박제: 상주 감시가 사라졌을 때는 먼저 종료 명령 기록과 PID 계보를 확인하고, 자연사로 분류하기 전에 명시적 `kill`·도구 셸 임시 자식·실제 감독 소유 프로세스를 구분한다.
+
+## 2026-08-03 — 새 supervisor 출력의 사람 질문이 relay patrol에서 오배달될 수 있음
+
+- 사고: 프로젝트 감독의 새 최종 assistant 출력이 `[kyle]`에게 승인·결정을 요구하거나 `waiting_for_kyle` 상태가 되어도, 기존 순찰은 전체 tail과 프롬프트·orchestration 렌더·과거 scrollback을 함께 읽어 판단할 기준이 없었다. 반대로 늦게 도착한 공식 super Run 상위 보고를 확인하지 않으면 이미 처리된 결과를 다시 깨울 위험도 있었다.
+- 원인: 출력 cursor 기준선과 최종 assistant 출력 경계가 없었고, relay가 project Run·super Run·사람 판단의 역할을 분리하는 고정 지시를 받지 못했다.
+- 박제: relay patrol은 role/Run 신분으로 supervisor output을 읽고, 이전 cursor 이후 bounded page만 읽는다. quoted prompt·orchestration 렌더·과거 scrollback·raw legacy는 misrouted 후보에서 제외한다. 새 출력에 `taskId+dispatchId`가 있고 사람 판단 요청 또는 `waiting_for_kyle`일 때만 공식 super Run upper report를 먼저 확인한다. upper report가 있으면 `late_recovered`만 기록하고 wake 0회, 없으면 project Run subject `misrouted_human_decision:<taskId>` 1회와 현재 supervisor role resolve 후 text+Enter wake 1회를 수행한다. 카드 상태 변경·upper report 대행·kyle 직접 질문은 하지 않는다.
+- 회귀: quoted prompt, orchestration render, baseline scrollback, raw legacy, missing upper report의 단일 project message·단일 role wake·같은 supervisor cursor 중복, late upper report의 zero wake를 fixture 6종으로 고정했다.

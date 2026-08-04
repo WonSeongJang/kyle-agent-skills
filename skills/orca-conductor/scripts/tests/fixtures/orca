@@ -2,86 +2,207 @@
 set -u
 
 STATE_DIR="${FAKE_ORCA_STATE_DIR:?}"
-if [ "${1:-}" = "orchestration" ] && [ "${2:-}" = "check" ]; then
-  case " $* " in
-    *" --types status "*)
-      count=$(($(cat "$STATE_DIR/status-count" 2>/dev/null || echo 0) + 1))
-      printf '%s\n' "$count" > "$STATE_DIR/status-count"
-      printf '%s\n' '{"result":{"messages":[{"id":"status-1","type":"status","from":"term_relay","body":"ack"}]}}'
-      exit 0
-      ;;
-  esac
-  count=$(($(cat "$STATE_DIR/worker-count" 2>/dev/null || echo 0) + 1))
-  printf '%s\n' "$count" > "$STATE_DIR/worker-count"
-  if [ "$count" -eq 1 ]; then
-    printf '%s\n' '{"result":{"messages":[]}}'
-  else
-    printf '%s\n' '{"result":{"messages":[{"id":"direct-1","type":"worker_done","from":"term_worker","body":"done","payload":{"taskId":"task_1","dispatchId":"dispatch_1"}},{"id":"direct-2","type":"worker_done","from":"term_worker","body":"done duplicate","payload":{"taskId":"task_1","dispatchId":"dispatch_1"}},{"id":"relay-1","type":"worker_done","from":"term_relay","body":"mirrored done","payload":{"taskId":"relay_card","dispatchId":"relay_dispatch"}}]}}'
-  fi
-  exit 0
-fi
+MODE="${FAKE_RELAY_ALERT_MODE:-clean}"
+DELIVERY_MODE="${FAKE_DELIVERY_MODE:-none}"
+mkdir -p "$STATE_DIR"
+CALLS="$STATE_DIR/calls.log"
+SEND_LOG="$STATE_DIR/sends.log"
+PROJECT_SEND_LOG="$STATE_DIR/project-sends.log"
+ROSTER_LOG="$STATE_DIR/roster.log"
+ACK_LOG="$STATE_DIR/acks.log"
 
-if [ "${1:-}" = "orchestration" ] && [ "${2:-}" = "task-list" ]; then
-  case "${FAKE_WORKER_ALERT_MODE:-none}" in
-    single|transcript)
-      printf '%s\n' '{"result":{"tasks":[{"id":"task_worker_1","status":"dispatched","dispatch_id":"ctx_worker_1","assignee_handle":"term_worker_legacy"}]}}'
+log_call() {
+  printf '%s\n' "$*" >> "$CALLS"
+}
+phase() {
+  cat "$STATE_DIR/phase" 2>/dev/null || printf '0\n'
+}
+candidate_message() {
+  local message_id="$1" task_id="$2" dispatch_id="$3" cursor="$4" snippet="$5"
+  printf '%s\n' "{\"message_id\":\"$message_id\",\"type\":\"relay_candidate\",\"sender_handle\":\"term_relay\",\"subject\":\"relay candidate\",\"payload\":{\"relayCandidate\":true,\"taskId\":\"$task_id\",\"dispatchId\":\"$dispatch_id\",\"outputCursor\":\"$cursor\",\"boundedSnippet\":\"$snippet\"}}"
+}
+candidate_delivery() {
+  case "$MODE" in
+    candidate_missing_id)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_candidate","messages":[{"message_id":"candidate_missing","type":"relay_candidate","sender_handle":"term_relay","subject":"bounded candidate missing ids","payload":{"relayCandidate":true,"outputCursor":"77","boundedSnippet":"waiting_for_kyle approval required"}}]}}'
       ;;
-    two)
-      printf '%s\n' '{"result":{"tasks":[{"id":"task_worker_1","status":"dispatched","dispatch_id":"ctx_worker_1","assignee_handle":"term_worker_legacy"},{"id":"task_worker_2","status":"dispatched","dispatch_id":"ctx_worker_2","assignee_handle":"term_worker_legacy_2"}]}}'
+    candidate_ambiguous)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_candidate","messages":[{"message_id":"candidate_ambiguous","type":"relay_candidate","sender_handle":"term_relay","subject":"bounded candidate ambiguous","payload":{"relayCandidate":true,"taskId":"task_candidate","dispatchId":"ctx_candidate","outputCursor":"77","boundedSnippet":"approval requested","contextAmbiguous":true}}]}}'
+      ;;
+    candidate_duplicate)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_candidate","messages":[{"message_id":"candidate_1","type":"relay_candidate","sender_handle":"term_relay","subject":"candidate one","payload":{"relayCandidate":true,"taskId":"task_candidate","dispatchId":"ctx_candidate","outputCursor":"77","boundedSnippet":"waiting_for_kyle approval required"}},{"message_id":"candidate_2","type":"relay_candidate","sender_handle":"term_relay","subject":"candidate duplicate","payload":{"relayCandidate":true,"taskId":"task_candidate","dispatchId":"ctx_candidate","outputCursor":"77","boundedSnippet":"same cursor"}}]}}'
+      ;;
+    candidate_internal)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_candidate","messages":[{"message_id":"candidate_internal","type":"relay_candidate","sender_handle":"term_relay","subject":"internal wording","payload":{"relayCandidate":true,"taskId":"task_candidate","dispatchId":"ctx_candidate","outputCursor":"77","boundedSnippet":"project decision pending in project Run"}}]}}'
+      ;;
+    candidate_waiting)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_candidate","messages":[{"message_id":"candidate_waiting","type":"relay_candidate","sender_handle":"term_relay","subject":"waiting candidate","payload":{"relayCandidate":true,"taskId":"task_candidate","dispatchId":"ctx_candidate","outputCursor":"77","boundedSnippet":"waiting_for_kyle approval required"}}]}}'
+      ;;
+    candidate_present|candidate_ask|candidate_escalation|candidate_absent|clean)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_candidate","messages":[{"message_id":"candidate_1","type":"relay_candidate","sender_handle":"term_relay","subject":"relay candidate","payload":{"relayCandidate":true,"taskId":"task_candidate","dispatchId":"ctx_candidate","outputCursor":"77","boundedSnippet":"waiting_for_kyle approval required"}}]}}'
       ;;
     *)
-      printf '%s\n' '{"result":{"tasks":[]}}'
+      printf '%s\n' '{"result":{"deliveryId":"delivery_candidate","messages":[]}}'
       ;;
   esac
-  exit 0
-fi
+}
 
-if [ "${1:-}" = "orchestration" ] && [ "${2:-}" = "worker-read" ]; then
-  count=$(($(cat "$STATE_DIR/transcript-read-count" 2>/dev/null || echo 0) + 1))
-  printf '%s\n' "$count" > "$STATE_DIR/transcript-read-count"
-  if [ "${FAKE_WORKER_ALERT_MODE:-none}" = "transcript" ]; then
-    printf '%s\n' '{"result":{"transcript":{"messages":[{"role":"tool","blocks":[{"type":"tool-result","output":"This retained legacy coordinator could not prove its original process identity. No effects were applied. legacy_read_only effectsApplied=false"}]}]}}}'
+if [ "${1:-}" = "roster" ] && [ "${2:-}" = "resolve" ]; then
+  role=""
+  previous=""
+  for argument in "$@"; do
+    if [ "$previous" = "--role" ]; then role="$argument"; break; fi
+    previous="$argument"
+  done
+  printf '%s %s %s\n' resolve "$role" "$*" >> "$ROSTER_LOG"
+  if [ "$role" = "relay" ]; then
+    handle="${FAKE_RELAY_HANDLE:-term_relay}"
+    printf '%s\n' "{\"result\":{\"member\":{\"project\":\"project_test\",\"board\":\"board_test\",\"role\":\"relay\",\"runId\":\"run_project\",\"currentHandle\":\"$handle\"},\"currentHandle\":\"$handle\",\"live\":true}}"
   else
-    printf '%s\n' '{"result":{"transcript":{"messages":[]}}}'
+    handle="${FAKE_SUPERVISOR_HANDLE:-term_supervisor}"
+    printf '%s\n' "{\"result\":{\"member\":{\"project\":\"project_test\",\"board\":\"board_test\",\"role\":\"project-supervisor\",\"runId\":\"run_project\",\"currentHandle\":\"$handle\"},\"currentHandle\":\"$handle\",\"live\":true}}"
   fi
   exit 0
 fi
 
 if [ "${1:-}" = "terminal" ] && [ "${2:-}" = "send" ]; then
-  printf '%s\n' "$*" >> "$STATE_DIR/sends.log"
+  log_call "$*"
+  printf '%s\n' "$*" >> "$SEND_LOG"
+  case " $* " in
+    *" --enter "*) [ "${FAKE_ENTER_MODE:-ok}" != fail ] || exit 7 ;;
+  esac
   printf '%s\n' '{"ok":true}'
   exit 0
 fi
 
+# Relay-only fixture: the companion never invokes this path.
 if [ "${1:-}" = "terminal" ] && [ "${2:-}" = "read" ]; then
-  terminal_handle=""
+  handle=""
+  cursor=""
+  limit=""
   previous=""
   for argument in "$@"; do
-    if [ "$previous" = "--terminal" ]; then
-      terminal_handle="$argument"
-      break
-    fi
+    [ "$previous" = "--terminal" ] && handle="$argument"
+    [ "$previous" = "--cursor" ] && cursor="$argument"
+    [ "$previous" = "--limit" ] && limit="$argument"
     previous="$argument"
   done
-  case "$terminal_handle" in
-    term_worker_legacy|term_worker_legacy_2)
-      if [ "${FAKE_WORKER_ALERT_MODE:-none}" = "transcript" ]; then
-        printf '%s\n' '{"result":{"terminal":{"tail":"BB"}}}'
+  log_call "$*"
+  [ "$handle" = term_supervisor ] || exit 8
+  [ "$MODE" = relay_bounded ] || {
+    printf '%s\n' '{"result":{"terminal":{"tail":[],"oldestCursor":"0","nextCursor":"0","latestCursor":"0","truncated":false}}}'
+    exit 0
+  }
+  printf '%s\n' "{\"result\":{\"terminal\":{\"tail\":[\"FINAL_ASSISTANT_OUTPUT taskId=task_candidate dispatchId=ctx_candidate waiting_for_kyle\"],\"oldestCursor\":\"10\",\"nextCursor\":\"12\",\"latestCursor\":\"12\",\"truncated\":false}}}"
+  exit 0
+fi
+
+if [ "${1:-}" = "orchestration" ] && [ "${2:-}" = "check" ]; then
+  log_call "$*"
+  previous=""
+  ack=""
+  requested_run=""
+  for argument in "$@"; do
+    [ "$previous" = "--ack" ] && ack="$argument"
+    [ "$previous" = "--run" ] && requested_run="$argument"
+    previous="$argument"
+  done
+  if [ -n "$ack" ]; then
+    printf '%s\n' "$ack" >> "$ACK_LOG"
+    case "$ack" in
+      delivery_1) printf '1\n' > "$STATE_DIR/phase" ;;
+      delivery_2) printf '2\n' > "$STATE_DIR/phase" ;;
+      *) printf '1\n' > "$STATE_DIR/phase" ;;
+    esac
+    printf '%s\n' '{"result":{"acknowledged":true}}'
+    exit 0
+  fi
+  if [ "${FAKE_CHECK_FAILURE:-}" = consumer_fenced ]; then
+    printf '%s\n' consumer_fenced >&2
+    exit 9
+  fi
+  if [ "$requested_run" != run_project ]; then
+    printf '%s\n' '{"result":{"deliveryId":null,"messages":[],"count":0}}'
+    exit 0
+  fi
+  current_phase=$(phase)
+  effective_mode="$DELIVERY_MODE"
+  if [ "$DELIVERY_MODE" = none ] && [[ "$MODE" == candidate_* ]]; then
+    effective_mode="$MODE"
+  fi
+  if [ "$DELIVERY_MODE" = none ] && [[ "$MODE" != candidate_* ]]; then
+    printf '%s\n' '{"result":{"deliveryId":null,"messages":[],"count":0}}'
+    exit 0
+  fi
+  if [ "$current_phase" -ne 0 ] && [ "$effective_mode" != fifo -o "$current_phase" -ne 1 ]; then
+    printf '%s\n' '{"result":{"messages":[]}}'
+    exit 0
+  fi
+  case "$effective_mode" in
+    fifo)
+      if [ "$current_phase" -eq 0 ]; then
+        printf '%s\n' '{"result":{"deliveryId":"delivery_1","messages":[{"message_id":"msg_1","type":"escalation","sender_handle":"term_worker","subject":"needs help","payload":{"task_id":"task_1","dispatch_id":"ctx_1"}},{"messageId":"msg_1_dup","type":"escalation","sender":"term_worker","subject":"duplicate","payload":{"taskId":"task_1","dispatchId":"ctx_1"}},{"id":"relay_1","type":"worker_done","from":"term_relay","payload":{"taskId":"relay_card","dispatchId":"ctx_relay"}}]}}'
       else
-        printf '%s\n' '{"result":{"terminal":{"tail":"worker_done failed: This retained legacy coordinator could not prove its original process identity. No effects were applied. legacy_read_only effectsApplied=false"}}}'
+        printf '%s\n' '{"result":{"deliveryId":"delivery_2","messages":[{"id":"msg_2","type":"decision_gate","fromHandle":"term_worker","subject":"choose","payload":{"taskId":"task_2","dispatchId":"ctx_2"}}]}}'
       fi
-      exit 0
+      ;;
+    malformed_mix)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_1","messages":[{"message_id":"bad_1","type":"escalation","sender_handle":"term_worker","subject":"missing ids","payload":{}}]}}'
+      ;;
+    worker_done)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_1","messages":[{"message_id":"wd_1","type":"worker_done","sender_handle":"term_worker","subject":"card done","payload":{"task_id":"task_w","dispatch_id":"ctx_w","outcome":"succeeded"}},{"message_id":"wd_1_dup","type":"worker_done","sender_handle":"term_worker","subject":"duplicate","payload":{"task_id":"task_w","dispatch_id":"ctx_w","outcome":"succeeded"}}]}}'
+      ;;
+    raw)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_1","messages":[{"message_id":"raw_status","type":"status","sender_handle":"term_worker","subject":"legacy_read_only effectsApplied=false","payload":{"task_id":"task_raw","dispatch_id":"ctx_raw"}}]}}'
+      ;;
+    super_reply)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_super_reply","messages":[{"message_id":"super_reply_1","type":"status","sender_handle":"term_super","subject":"supervisor reply","payload":{"superReply":true,"targetRunId":"run_super"}}]}}'
+      ;;
+    super_reply_duplicate)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_super_reply","messages":[{"message_id":"super_reply_same","type":"status","sender_handle":"term_super","subject":"supervisor reply","payload":{"superReply":true,"targetRunId":"run_super"}},{"messageId":"super_reply_same","type":"status","sender":"term_super","subject":"same message replay","payload":{"superReply":true,"targetRunId":"run_super"}}]}}'
+      ;;
+    ordinary_status)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_ordinary_status","messages":[{"message_id":"ordinary_status_1","type":"status","sender_handle":"term_worker","subject":"ordinary status","payload":{"superReply":false,"targetRunId":"run_super"}}]}}'
+      ;;
+    candidate_absent|candidate_waiting|candidate_internal|candidate_present|candidate_ask|candidate_escalation|candidate_missing_id|candidate_ambiguous|candidate_duplicate)
+      candidate_delivery
+      ;;
+    *)
+      printf '%s\n' '{"result":{"deliveryId":null,"messages":[],"count":0}}'
       ;;
   esac
-  count=$(($(cat "$STATE_DIR/relay-read-count" 2>/dev/null || echo 0) + 1))
-  printf '%s\n' "$count" > "$STATE_DIR/relay-read-count"
-  if [ "${FAKE_RELAY_ALERT_MODE:-structured}" = "clean" ]; then
-    printf '%s\n' '{"result":{"terminal":{"tail":"relay idle"}}}'
-  elif [ "${FAKE_RELAY_ALERT_MODE:-structured}" = "raw" ]; then
-    printf '%s\n' '{"result":{"terminal":{"tail":"감독 보고 실패: legacy_read_only 오류로 전송되지 않았습니다. effectsApplied=false입니다."}}}'
-  else
-    printf '%s\n' '{"result":{"terminal":{"tail":"ORCA_LEGACY_READ_ONLY_REPORT task=task_legacy dispatch=ctx_legacy type=escalation summary=no-progress"}}}'
-  fi
+  exit 0
+fi
+
+if [ "${1:-}" = "orchestration" ] && [ "${2:-}" = "inbox" ]; then
+  log_call "$*"
+  case "$MODE" in
+    candidate_internal)
+      printf '%s\n' '{"result":{"messages":[{"id":"official_1","run_id":"run_project","type":"decision_gate","payload":{"taskId":"task_candidate","dispatchId":"ctx_candidate"}}]}}'
+      ;;
+    candidate_present)
+      printf '%s\n' '{"result":{"messages":[{"id":"official_1","run_id":"run_project","type":"decision_gate","payload":{"taskId":"task_candidate","dispatchId":"ctx_candidate"}}]}}'
+      ;;
+    candidate_ask)
+      printf '%s\n' '{"result":{"messages":[{"id":"official_1","run_id":"run_project","type":"question","payload":{"taskId":"task_candidate","dispatchId":"ctx_candidate"}}]}}'
+      ;;
+    candidate_escalation)
+      printf '%s\n' '{"result":{"messages":[{"id":"official_1","run_id":"run_project","type":"escalation","payload":{"taskId":"task_candidate","dispatchId":"ctx_candidate"}}]}}'
+      ;;
+    candidate_ambiguous)
+      printf '%s\n' '{"result":{"messages":[{"id":"official_1","run_id":"run_project","type":"escalation","payload":{"taskId":"task_candidate","dispatchId":"ctx_candidate"}},{"id":"official_2","run_id":"run_project","type":"decision_gate","payload":{"taskId":"task_candidate","dispatchId":"ctx_candidate"}}]}}'
+      ;;
+    *)
+      printf '%s\n' '{"result":{"messages":[]}}'
+      ;;
+  esac
+  exit 0
+fi
+
+if [ "${1:-}" = "orchestration" ] && [ "${2:-}" = "send" ]; then
+  log_call "$*"
+  printf '%s\n' "$*" >> "$PROJECT_SEND_LOG"
+  printf '%s\n' '{"result":{"message":{"id":"project-message-1"}}}'
   exit 0
 fi
 
