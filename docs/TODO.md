@@ -115,3 +115,9 @@ bash scripts/validate.sh
 - [ ] 라우터 경유 강제: 임명장·인계서에 모델명 직접 기입 금지, "선택은 select-routing-pair.sh 경유"만. kyle의 모델 지정은 만료일 있는 핀(pin)으로 원장 기록 — 판 종료 시 자동 소멸 (이번 판 luna max 핀이 첫 사례).
 - [ ] 동일 모델 셀프 검수 금지: reviewerFamilyAllowlist(가족 제한)에 더해 "reviewer.model != developer.model" 하드 규칙 추가.
 - [ ] 문서 단일 원본화: routing-providers.json이 유일 원본, roster.md의 모델 표는 JSON에서 자동 생성 (산문-JSON 괴리로 슈퍼감독 오판정한 실사고 근거).
+
+## 2026-08-05 — 슈퍼감독 지시 편지가 companion ack에 삼켜지는 사각지대 (실사고, 슈퍼감독 기록)
+
+- 사고: 슈퍼감독이 gate 해소 지시를 프로젝트 Run에 type=status로 공식 전달했으나, companion이 "upperReport 없는 일반 status는 깨우지 않고 ack" 규칙대로 조용히 소비 → 감독의 미읽음 조회에 안 떠서 "공식 편지 대기" 정체 발생 (router-improvement-1, msg_8de55f6d81ab). kyle이 화면으로 발견.
+- 임시 운영 규칙 (즉시 적용): 슈퍼감독→감독 지시는 편지 발송 + msg id를 명시한 터미널 깨우기를 항상 한 쌍으로.
+- [ ] companion 수정 후보: 발신자가 슈퍼감독 명패이거나 payload에 superDirective=true가 있는 status는 ack 전에 감독을 1회 깨운다 (기존 구조화 상위 보고 wake와 같은 1회 보장 패턴).
