@@ -121,3 +121,5 @@ bash scripts/validate.sh
 - 사고: 슈퍼감독이 gate 해소 지시를 프로젝트 Run에 type=status로 공식 전달했으나, companion이 "upperReport 없는 일반 status는 깨우지 않고 ack" 규칙대로 조용히 소비 → 감독의 미읽음 조회에 안 떠서 "공식 편지 대기" 정체 발생 (router-improvement-1, msg_8de55f6d81ab). kyle이 화면으로 발견.
 - 임시 운영 규칙 (즉시 적용): 슈퍼감독→감독 지시는 편지 발송 + msg id를 명시한 터미널 깨우기를 항상 한 쌍으로.
 - [ ] companion 수정 후보: 발신자가 슈퍼감독 명패이거나 payload에 superDirective=true가 있는 status는 ack 전에 감독을 1회 깨운다 (기존 구조화 상위 보고 wake와 같은 1회 보장 패턴).
+
+- [ ] 중계기 v3 후보 — "제자리 뜀박질(busy-wait)" 감지 (2026-08-05 실사고의 나머지 반쪽, kyle 질문에서 도출): 순찰마다 판 상태 지문(카드 수·active dispatch 수·마지막 카드 created_at)을 기록·비교. 감독이 화면상 활동 중인데 판 지문이 N회(예: 3회) 연속 불변 + blocked/대기 카드가 존재하면, 감독에게 "무엇을 대기 중인지" 직문 → 답변의 대기 대상을 장부에서 결정적 대조(예: "슈퍼 편지 대기" → 해당 발신자의 read 포함 편지 존재 여부). 화면 활동만으로는 논리적 교착(읽힌 편지 대기 등)을 못 잡는다는 실측 근거.
