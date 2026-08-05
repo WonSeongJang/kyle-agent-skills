@@ -334,5 +334,5 @@
 - 성격: 모델·검수·복구·교체가 결합된 오케스트레이션·macOS 서명/TCC·동시성·수명주기·통합 운영 · 무게: HEAVY
 - 라운드: 장부 result에서 확인된 트랙별 단계는 A R1→R7, B R1→R3, C R1, D R1→R3, E R1→R3, F 조사 1건, G R1→R3, H R1→R2, I R1이며, 통합 마감은 closeout R1→R6·교차검수 R1→R3·서명 빌드·격리 E2E·운영 교체로 이어졌다. 구현 모델-effort·검수 모델-강도/범위·치명·중요·사소 누계와 전체 총 라운드 수는 result에서 확인되지 않아 미상으로 둔다.
 - 전환 이벤트: 최종 통합 commit `165153a06`의 서명 빌드·격리 패키지 E2E PASS 뒤 운영 앱을 PID `62007`→`30017`으로 교체했다. 교체 뒤 supervisor/relay rebind 및 worker_done capability 재검증이 필요했고, 폐기된 capability에 대한 worker_done이 6회 거부된 뒤 감독이 수동 종결했다. relay v2·companion·kicker는 PPID 1로 복구했다.
-- 결말: 마감 진행 중 — receipt 실효 PASS와 TCC 권한 유지 PASS를 확인했다. `get-app-state`는 구 빌드와 동일한 결함 E로 후속 이월한다.
+- 결말: 마감 완료 — receipt 실효 PASS와 TCC 권한 유지 PASS를 확인했다. `get-app-state`는 구 빌드와 동일한 결함 E로 후속 이월한다.
 - 관찰: 고정 서명은 TCC grant 유지 대상을 충족했지만 권한 표시와 실제 기능 동작은 분리해 기록해야 한다. 앱 교체 뒤에는 dispatch capability 폐기와 rebind를 복구 절차의 한 단계로 고정하고, 재검증 실패 시 worker_done을 성공으로 올리지 말고 감독 수동 종결까지 남겨야 한다.
