@@ -328,3 +328,11 @@
 - 플레이북 랠리: GLM medium 문서 작업 → Sol medium 검수. R1은 정책 충돌 등 critical 1·major 4·minor 1 FAIL, R2는 월간 병합 원본과 방향 개수 major 1·minor 1 FAIL, R3는 critical·major·minor 0 PASS로 수렴했다. 체크포인트 `4d7f26948`은 `docs/upstream-sync-playbook.md`를 처음 Git 추적하고 maintenance 양방향 링크를 함께 넣었다.
 - 사고와 교훈: 미추적 살아있는 플레이북을 작업자가 전면 교체하다 삭제해 Git 복구가 불가능했고, 셸 전체 쓰기로 복원했다. 살아있는 플레이북은 생성 직후 Git 추적·커밋한다. 독립 검수자가 `git write-tree`를 읽기 전용 확인에 사용한 일과 FAIL 본문에 `outcome=succeeded`를 보낸 lifecycle 불일치도 있었으므로, 검수 spec에는 객체 생성 금지와 본문 판정·outcome 일치 조건을 명시한다. worker의 긴 전체 파일 재작성보다 좁은 patch를 강제한다.
 - 결말: 결함 A 소스 체크포인트 `f5de48c11`, 판 마감 문서 체크포인트 `4d7f26948`. Computer Use, terminal close receipt, 버전 표시, 세션 GC는 ready로 보존하고 이번 판에서 발령하지 않았다.
+
+### 2026-08-05 [판:improvement-1] 개선 판 1회차 — A-I 트랙 통합·운영 앱 교체
+
+- 성격: 모델·검수·복구·교체가 결합된 오케스트레이션·macOS 서명/TCC·동시성·수명주기·통합 운영 · 무게: HEAVY
+- 라운드: 장부 result에서 확인된 트랙별 단계는 A R1→R7, B R1→R3, C R1, D R1→R3, E R1→R3, F 조사 1건, G R1→R3, H R1→R2, I R1이며, 통합 마감은 closeout R1→R6·교차검수 R1→R3·서명 빌드·격리 E2E·운영 교체로 이어졌다. 구현 모델-effort·검수 모델-강도/범위·치명·중요·사소 누계와 전체 총 라운드 수는 result에서 확인되지 않아 미상으로 둔다.
+- 전환 이벤트: 최종 통합 commit `165153a06`의 서명 빌드·격리 패키지 E2E PASS 뒤 운영 앱을 PID `62007`→`30017`으로 교체했다. 교체 뒤 supervisor/relay rebind 및 worker_done capability 재검증이 필요했고, 폐기된 capability에 대한 worker_done이 6회 거부된 뒤 감독이 수동 종결했다. relay v2·companion·kicker는 PPID 1로 복구했다.
+- 결말: 마감 진행 중 — receipt 실효 PASS와 TCC 권한 유지 PASS를 확인했다. `get-app-state`는 구 빌드와 동일한 결함 E로 후속 이월한다.
+- 관찰: 고정 서명은 TCC grant 유지 대상을 충족했지만 권한 표시와 실제 기능 동작은 분리해 기록해야 한다. 앱 교체 뒤에는 dispatch capability 폐기와 rebind를 복구 절차의 한 단계로 고정하고, 재검증 실패 시 worker_done을 성공으로 올리지 말고 감독 수동 종결까지 남겨야 한다.
