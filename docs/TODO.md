@@ -95,3 +95,23 @@ bash scripts/validate.sh
 - [ ] companion 개설 완결성 대조 1건 추가: 개시 선언(status) 배달 시 해당 board의 relay roster active 행이 없으면 `MISSING_RELAY` 진단을 감독에게 1회 깨움 (present/absent 결정적 대조 — 추측 판정 아님. 기존 upper report 누락 감지 패턴의 일반화).
 - [ ] companion kicker 장부 대조 NUDGE (기존 항목과 통합 검토): ready 카드 present + active dispatch absent + coordinator idle → 감독 깨움. 오늘 정체 2회의 직접 방어막.
 - [ ] `board-bootstrap.sh` 신설: 판 개설 기계 단계 일괄 실행 — Run 생성 → 감독 스폰+roster 대조 → companion 기동 → 중계기 스폰+roster 대조+kicker → 결과 JSON 리포트. 임명장에는 임무·헌법·금지선만 남긴다. 완성 전까지는 임명장 고정 6단계(super-conductor incident-log 2026-08-04 박제)가 임시 방어막.
+
+## 2026-08-05 — 라우터 자기개선 고리 (kyle 설계 의도: "알아서 돌면서 좋은 모델을 찾는다", 슈퍼감독 정리)
+
+배경: improvement-1 판에서 라우팅 2중 사고 — (1) 인계서의 "GPT 신규 작업은 luna max" 한 줄이 라우터 전체를 덮어 작업자·검수자 luna 100% 단일화 (kyle 발견), (2) 슈퍼감독도 산문 문서(roster.md)로 판정해 라우터 JSON 원본과 어긋난 정정 지시를 보냄. 관측층(routing-events JSONL 자동 기록)은 이미 설계돼 있으나 "수집→점수 반영→지분 조절" 고리가 수동.
+
+우선순위 1 — 고리 닫기:
+
+- [ ] 집계기 스크립트: 각 레포 `.orca/routing-events/*.jsonl`을 읽어 (모델, effort, role, taskClass)별 성적표 산출 → `routing-providers.json`의 quality 수정안을 diff/PR로 제안. kyle은 승인만 한다 (수기 점수 커밋 대체).
+- [ ] 성적 지표 고정: 1차 검수 통과율, 종결까지 라운드 수, 결함 유출률(교차·마감 검수에서 뒤늦게 발견 — luna-luna 셀프 검수 사례가 근거), 비용·소요시간. "점수/비용" 축 필수 (luna 재편입 근거가 가격 인하였음).
+
+우선순위 2 — 배분 자동화:
+
+- [ ] 적응형 지분: 고정 experimentSharePercent(10/20%) 대신 성적 기반 자동 증감(톰슨 샘플링류). 바닥 5%·천장 40% 가드. 졸업·강등 기준 명문화: "20라운드 이상 + 신뢰구간 하한이 현직자 초과 → 정식 승격" / 반대면 강등.
+- [ ] 최신성 반감기(예: 30일): 제공사의 조용한 모델 갱신에 대응해 옛 성적을 자연 소멸.
+
+우선순위 3 — 구조적 재발 방지 (2026-08-05 사고 직결):
+
+- [ ] 라우터 경유 강제: 임명장·인계서에 모델명 직접 기입 금지, "선택은 select-routing-pair.sh 경유"만. kyle의 모델 지정은 만료일 있는 핀(pin)으로 원장 기록 — 판 종료 시 자동 소멸 (이번 판 luna max 핀이 첫 사례).
+- [ ] 동일 모델 셀프 검수 금지: reviewerFamilyAllowlist(가족 제한)에 더해 "reviewer.model != developer.model" 하드 규칙 추가.
+- [ ] 문서 단일 원본화: routing-providers.json이 유일 원본, roster.md의 모델 표는 JSON에서 자동 생성 (산문-JSON 괴리로 슈퍼감독 오판정한 실사고 근거).
