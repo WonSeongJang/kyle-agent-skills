@@ -50,6 +50,10 @@ ln -s <super-conductor 경로> ~/.claude/skills/super-conductor
 - 원본은 한 곳에 두고 **심볼릭 링크**로 각 도구(Claude·Codex 등)가 같은 파일을 보게 한다.
 - 수정은 항상 원본 한 곳만 고친다.
 
+> **접근 권한 안내**
+> - Orca 포크(`ChickenBreast-ky/orca`)는 **공개 저장소**라 그냥 clone 하면 된다. 초대 불필요.
+> - 이 지휘 스킬 저장소(`ChickenBreast-ky/kyle-agent-skills`)는 **비공개**다. clone 하려면 **협업자 초대**를 먼저 받아야 한다. 초대가 오기 전에는 위 clone 명령이 "repository not found"로 실패한다.
+
 ### 1-3. 모델 계정
 
 - `skills/orca-conductor/references/routing-providers.json`이 **모델 편성의 단일 원본**이다.
