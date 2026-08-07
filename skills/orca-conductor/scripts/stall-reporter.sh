@@ -154,8 +154,27 @@ case "$MIN_THRESHOLD" in ''|*[!0-9]*) MIN_THRESHOLD=3 ;; esac
 
 log "start relay_log=$RELAY_LOG super_run=$SUPER_RUN_ID thresholds=$THRESHOLDS poll=${POLL_SEC}s"
 
+# 컴퓨터가 절전에 들어가면 중계기도 이 스크립트도 함께 얼었다가 함께 깨어난다.
+# 그때 일기 파일만 보면 "감시자가 죽었다"와 구분되지 않는다(2026-08-07 오탐 3건 — 세 판이
+# 동시에 약 28분 침묵했고 실제 원인은 맥 절전이었다). 그래서 이 스크립트 자신의 루프가
+# 얼었는지를 함께 본다. 내 잠이 예정보다 훨씬 길었다면 시스템이 멈춘 것이다.
+LAST_TICK=$(date +%s)
+FREEZE_FACTOR=3
+GRACE_UNTIL=0
+
 while :; do
   NOW=$(date +%s)
+  DRIFT=$(( NOW - LAST_TICK ))
+  if [ "$DRIFT" -gt $(( POLL_SEC * FREEZE_FACTOR )) ]; then
+    # 중계기가 다시 순찰을 쌓을 시간을 준 뒤에야 침묵을 다시 판정한다.
+    GRACE_UNTIL=$(( NOW + POLL_SEC * 4 ))
+    if [ "$RELAY_SILENT_ALERTED" -ne 0 ]; then
+      RELAY_SILENT_ALERTED=0
+      save_state
+    fi
+    log "system_pause_detected drift=${DRIFT}s expected=${POLL_SEC}s grace_until=$GRACE_UNTIL (절전·정지 추정, 침묵 판정 보류)"
+  fi
+  LAST_TICK="$NOW"
 
   if [ ! -f "$RELAY_LOG" ]; then
     log "relay_log_missing"
@@ -164,7 +183,7 @@ while :; do
     SILENT_FOR=$(( NOW - MTIME ))
 
     # 사건 1. 중계기 자체가 멈춘 경우. 감시자가 죽으면 정체도 못 잡는다.
-    if [ "$SILENT_FOR" -ge "$RELAY_SILENCE_SEC" ]; then
+    if [ "$SILENT_FOR" -ge "$RELAY_SILENCE_SEC" ] && [ "$NOW" -ge "$GRACE_UNTIL" ]; then
       if [ "$RELAY_SILENT_ALERTED" -eq 0 ]; then
         send_alert "[정체신고] 중계기 순찰이 멈췄다 — $BOARD" \
 "중계기가 남기는 순찰 일기가 ${SILENT_FOR}초 동안 갱신되지 않았다. 감시자가 멈췄으므로 이 판의 정체를 아무도 볼 수 없는 상태다.
