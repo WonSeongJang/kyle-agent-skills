@@ -127,9 +127,13 @@ parse_last_line() {
   NO_PROGRESS=$(printf '%s' "$LAST_LINE" | sed -n 's/.*consecutive_no_progress=\([0-9][0-9]*\).*/\1/p' | head -1)
   JUDGEMENT=$(printf '%s' "$LAST_LINE" | sed -n 's/.*judgement=\([A-Za-z_]*\).*/\1/p' | head -1)
   BANNER=$(printf '%s' "$LAST_LINE" | sed -n 's/.*banner=\([A-Za-z_-]*\).*/\1/p' | head -1)
+  # 중계기는 감독 화면만 본다. 작업자가 도는 동안 감독이 조용한 것은 정상이므로,
+  # 중계기가 active_dispatched를 써 주면 그 경우의 임계값을 높인다(2026-08-07 오탐 1건).
+  ACTIVE_DISPATCHED=$(printf '%s' "$LAST_LINE" | sed -n 's/.*active_dispatched=\([0-9][0-9]*\).*/\1/p' | head -1)
   [ -n "$NO_PROGRESS" ] || NO_PROGRESS=0
   [ -n "$JUDGEMENT" ] || JUDGEMENT=unknown
   [ -n "$BANNER" ] || BANNER=unknown
+  [ -n "$ACTIVE_DISPATCHED" ] || ACTIVE_DISPATCHED=""
 }
 
 # 이번 정체 사건에서 알려야 할 임계값을 고른다. 이미 알린 것보다 큰 것만 고른다.
@@ -185,7 +189,16 @@ while :; do
 
     # 사건 2. 감독 정체. 판정은 중계기가 이미 했고 여기서는 숫자만 본다.
     parse_last_line
-    if [ "$NO_PROGRESS" -lt "$MIN_THRESHOLD" ]; then
+    # 작업자가 실제로 돌고 있으면 감독의 침묵은 정상 대기다. 첫 임계값을 건너뛰고
+    # 더 높은 단계에서만 알린다. 중계기가 숫자를 안 써 주면 기존 동작 그대로다.
+    EFFECTIVE_MIN="$MIN_THRESHOLD"
+    WORKER_NOTE=""
+    if [ -n "$ACTIVE_DISPATCHED" ] && [ "$ACTIVE_DISPATCHED" -gt 0 ]; then
+      EFFECTIVE_MIN=$(printf '%s' "$THRESHOLDS" | cut -d, -f2)
+      case "$EFFECTIVE_MIN" in ''|*[!0-9]*) EFFECTIVE_MIN="$MIN_THRESHOLD" ;; esac
+      WORKER_NOTE="작업자 ${ACTIVE_DISPATCHED}개가 실행 중이다. 감독의 침묵이 정상 대기일 수 있으므로 첫 임계값은 건너뛰었다."
+    fi
+    if [ "$NO_PROGRESS" -lt "$EFFECTIVE_MIN" ]; then
       if [ "$ALERTED_LEVEL" -ne 0 ]; then
         ALERTED_LEVEL=0
         save_state
@@ -201,7 +214,9 @@ while :; do
 중계기 판정: $JUDGEMENT
 화면 오류 배너: $BANNER
 연속 무진행 횟수: $NO_PROGRESS
+진행 중 발령: ${ACTIVE_DISPATCHED:-중계기가 기록하지 않음}
 일기 파일: $RELAY_LOG
+$WORKER_NOTE
 
 중계기가 쓴 마지막 줄 원문:
 $LAST_LINE
