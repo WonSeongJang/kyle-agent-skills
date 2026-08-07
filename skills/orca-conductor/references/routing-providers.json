@@ -61,7 +61,7 @@
       "id": "zai",
       "family": "zai",
       "quotaKey": "zai",
-      "enabled": true,
+      "enabled": false,
       "weeklyReservePercent": 5,
       "models": [
         {
