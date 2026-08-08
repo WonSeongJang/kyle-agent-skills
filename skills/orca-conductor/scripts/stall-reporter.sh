@@ -160,7 +160,14 @@ log "start relay_log=$RELAY_LOG super_run=$SUPER_RUN_ID thresholds=$THRESHOLDS p
 # 얼었는지를 함께 본다. 내 잠이 예정보다 훨씬 길었다면 시스템이 멈춘 것이다.
 LAST_TICK=$(date +%s)
 FREEZE_FACTOR=3
-GRACE_UNTIL=0
+# 갓 뜬 신고기는 비교할 과거 시각이 없어서 절전을 감지하지 못한다. 그래서 맥이
+# 자는 동안 낡은 일기를 보고 "감시자 사망"으로 오보한다(2026-08-08 실사고 — kyle이
+# 노트북을 들고 나가 5시간 잠들었는데 새로 띄운 신고기가 중계기 고장으로 신고했다).
+# 시작 직후에는 일기가 이미 낡아 있어도 몇 주기 지켜본다. 중계기가 깨어나 다시 쓰면
+# 그것으로 끝이고, 그때까지도 멎어 있으면 그때 진짜로 신고한다.
+STARTUP_GRACE_CYCLES="${STALL_REPORTER_STARTUP_CYCLES:-4}"
+GRACE_UNTIL=$(( LAST_TICK + POLL_SEC * STARTUP_GRACE_CYCLES ))
+log "startup_grace 적용 ${POLL_SEC}s x ${STARTUP_GRACE_CYCLES}주기 동안 침묵 판정 보류"
 
 while :; do
   NOW=$(date +%s)
