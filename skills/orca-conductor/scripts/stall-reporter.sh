@@ -167,7 +167,11 @@ while :; do
   DRIFT=$(( NOW - LAST_TICK ))
   if [ "$DRIFT" -gt $(( POLL_SEC * FREEZE_FACTOR )) ]; then
     # 중계기가 다시 순찰을 쌓을 시간을 준 뒤에야 침묵을 다시 판정한다.
-    GRACE_UNTIL=$(( NOW + POLL_SEC * 4 ))
+    # 유예는 멈춘 길이에 비례해야 한다. 맥이 3시간 자면 일기도 3시간 낡는데,
+    # 고정 4분만 봐주면 깨어나자마자 "감시자 사망"으로 오보한다(2026-08-08 실사고 — 4회 연속 오보).
+    GRACE_SPAN=$(( DRIFT + POLL_SEC * 4 ))
+    [ "$GRACE_SPAN" -lt $(( POLL_SEC * 4 )) ] && GRACE_SPAN=$(( POLL_SEC * 4 ))
+    GRACE_UNTIL=$(( NOW + GRACE_SPAN ))
     if [ "$RELAY_SILENT_ALERTED" -ne 0 ]; then
       RELAY_SILENT_ALERTED=0
       save_state
