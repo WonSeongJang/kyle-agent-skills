@@ -206,5 +206,12 @@ if [ "${1:-}" = "orchestration" ] && [ "${2:-}" = "send" ]; then
   exit 0
 fi
 
+if [ "${1:-}" = "orchestration" ] && [ "${2:-}" = "task-list" ]; then
+  # 카드 장부(task-list)를 시나리오 파일로 제어한다. 없으면 빈 목록.
+  # 판 비움 감지 사슬의 count_cards 가 이 명령으로 판의 카드 상태를 읽는다(실제 orca 도 지원).
+  cat "$STATE_DIR/task_list.json" 2>/dev/null || printf '%s\n' '{"result":{"tasks":[]}}'
+  exit 0
+fi
+
 printf '%s\n' "unexpected fake orca call: $*" >&2
 exit 2

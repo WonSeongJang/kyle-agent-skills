@@ -25,6 +25,7 @@ THRESHOLDS="3,12,36"
 POLL_SEC=60
 RELAY_SILENCE_SEC=900
 ONCE=0
+BOARD_IDLE_SEC=300
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -37,8 +38,6 @@ while [ $# -gt 0 ]; do
     --thresholds) [ $# -ge 2 ] || usage; THRESHOLDS="$2"; shift 2 ;;
     --poll-sec) [ $# -ge 2 ] || usage; POLL_SEC="$2"; shift 2 ;;
     --relay-silence-sec) [ $# -ge 2 ] || usage; RELAY_SILENCE_SEC="$2"; shift 2 ;;
-    # B8 시험 호환: --board-idle-sec(B7 인자)를 값만 저장한다. main엔 사건3~5가 없어 쓰는 곳은 없지만,
-    # 이 인자를 모르면 UNKNOWN_FLAG 로 사건6 경로가 아예 실행되지 않는다(코디네이터 결정 A).
     --board-idle-sec) [ $# -ge 2 ] || usage; BOARD_IDLE_SEC="$2"; shift 2 ;;
     --once) ONCE=1; shift ;;
     *) echo "UNKNOWN_FLAG $1" >&2; usage ;;
@@ -105,14 +104,31 @@ ALERTED_LEVEL=0
 RELAY_SILENT_ALERTED=0
 # B8: 감독 깨우기 심박 침묵을 이 사건에서 이미 알렸는지.
 WAKER_SILENT_ALERTED=0
+# B7(2026-08-09): 판 비움 감지 상태. 세 경우의 관측 시작 시각과 알림 여부.
+#   경우 A: 대기 카드 있음 + 발령 0        -> 감독이 발령을 안 한다
+#   경우 B: 판 비움 + 미결 카드 0          -> 감독이 다음 카드를 만들지 않는다
+#   경우 C: 판 비움 + 미결 카드 있음       -> 다음 요청은 남아 있는데 아무도 안 돈다
+# F-B7(2026-08-09 수정 1): 예전에는 경우 C가 경우 B로 접혔다. 그러면 "할 일이 남았는데
+# 안 도는 상태"가 "할 일이 없어 끝난 상태"로 보고된다 — 이 신고기가 막으려던 바로 그 오보다.
+BOARD_CASE_A_SINCE=0
+BOARD_CASE_A_ALERTED=0
+BOARD_CASE_B_SINCE=0
+BOARD_CASE_B_ALERTED=0
+BOARD_CASE_C_SINCE=0
+BOARD_CASE_C_ALERTED=0
+# F-B7(수정 2): 카드 장부 조회 실패 상태. 실패는 "카드 0장"이 아니라 "판정 불가"다.
+CARD_QUERY_FAIL_STREAK=0
+CARD_QUERY_FAIL_ALERTED=0
+CARD_CLASSIFICATION_UNAVAILABLE_STREAK=0
+CARD_CLASSIFICATION_UNAVAILABLE_ALERTED=0
 if [ -f "$STATE_FILE" ]; then
   # shellcheck disable=SC1090
   . "$STATE_FILE" 2>/dev/null || true
 fi
 
 save_state() {
-  printf 'ALERTED_LEVEL=%s\nRELAY_SILENT_ALERTED=%s\nWAKER_SILENT_ALERTED=%s\n' \
-    "$ALERTED_LEVEL" "$RELAY_SILENT_ALERTED" "${WAKER_SILENT_ALERTED:-0}" > "$STATE_FILE"
+  printf 'ALERTED_LEVEL=%s\nRELAY_SILENT_ALERTED=%s\nWAKER_SILENT_ALERTED=%s\nBOARD_CASE_A_SINCE=%s\nBOARD_CASE_A_ALERTED=%s\nBOARD_CASE_B_SINCE=%s\nBOARD_CASE_B_ALERTED=%s\nBOARD_CASE_C_SINCE=%s\nBOARD_CASE_C_ALERTED=%s\nCARD_QUERY_FAIL_STREAK=%s\nCARD_QUERY_FAIL_ALERTED=%s\nCARD_CLASSIFICATION_UNAVAILABLE_STREAK=%s\nCARD_CLASSIFICATION_UNAVAILABLE_ALERTED=%s\n' \
+    "$ALERTED_LEVEL" "$RELAY_SILENT_ALERTED" "${WAKER_SILENT_ALERTED:-0}" "${BOARD_CASE_A_SINCE:-0}" "${BOARD_CASE_A_ALERTED:-0}" "${BOARD_CASE_B_SINCE:-0}" "${BOARD_CASE_B_ALERTED:-0}" "${BOARD_CASE_C_SINCE:-0}" "${BOARD_CASE_C_ALERTED:-0}" "${CARD_QUERY_FAIL_STREAK:-0}" "${CARD_QUERY_FAIL_ALERTED:-0}" "${CARD_CLASSIFICATION_UNAVAILABLE_STREAK:-0}" "${CARD_CLASSIFICATION_UNAVAILABLE_ALERTED:-0}" > "$STATE_FILE"
 }
 
 # B8: 감독 깨우기가 살아 있는지. 심박 파일의 마지막 갱신 시각만 본다 — 이 파일에는 깨우기만 쓴다.
@@ -143,6 +159,8 @@ check_waker_heartbeat() {
   [ -n "$WAKER_SILENCE_OVERRIDE" ] && WAKER_LIMIT="$WAKER_SILENCE_OVERRIDE"
   [ "$WAKER_SILENT_FOR" -ge 0 ] || WAKER_SILENT_FOR=0
 }
+# B7: 임계값 검증. --board-idle-sec 가 숫자가 아니면 기본값으로 돌아간다.
+case "$BOARD_IDLE_SEC" in ''|*[!0-9]*) BOARD_IDLE_SEC=300 ;; esac
 
 log() {
   printf '%s stall-reporter board=%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$BOARD" "$*" >&2
@@ -183,8 +201,25 @@ file_mtime() {
 
 # 중계기 일기의 마지막 줄에서 숫자만 뽑는다. 여기서 새로 판정하지 않는다.
 parse_last_line() {
-  LAST_LINE=$(tail -n 1 "$RELAY_LOG" 2>/dev/null || printf '')
+  # B7 요구 4: companion이 찍는 gate_nudge_suppressed 줄이 시간당 약 2160줄 늘어나서
+  # tail -n 1 이 거의 항상 잡음 줄을 잡는다. 그래서 순찰 데이터가 있는 줄만 걸러 그중
+  # 마지막 줄을 쓴다.
+  #
+  # F-B7(2026-08-09 수정 3): 예전 주석은 "역순으로 찾는다"였는데 실제 코드는 정방향
+  # 전체 스캔이었다. 주석을 코드에 맞췄다. 코드를 역순(`tail -r | grep -m1`)으로 바꾸지
+  # 않은 이유: (1) 잡음 홍수는 순찰 줄 "뒤"에 쌓이므로 역순으로 찾아도 결국 파일 전체를
+  # 훑는다 — 실측한 홍수 모양에서 이득이 0이다. (2) `tail -r` 은 파일을 통째로 메모리에
+  # 올려 뒤집으므로, 흘려보내며 읽는 지금의 한 번 스캔보다 오히려 비싸다. (3) `tail -r`
+  # 은 BSD 전용이라 GNU(`tac`) 분기가 하나 더 늘어난다. 10만 줄 홍수 시험이 지금 방식으로
+  # 통과하므로 성능 목적의 역순 전환은 근거가 없다.
+  LAST_LINE=$(grep -E 'consecutive_no_progress=|no_progress_streak=' "$RELAY_LOG" 2>/dev/null | tail -n 1)
+  if [ -z "$LAST_LINE" ]; then
+    LAST_LINE=$(tail -n 1 "$RELAY_LOG" 2>/dev/null || printf '')
+  fi
+  # 순찰 줄은 consecutive_no_progress 또는 no_progress_streak 중 어느 쪽 필드명을 쓸 수 있다.
+  # BSD sed 는 BRE 에서 \| 를 지원하지 않으므로 두 패턴으로 나누어 찾는다.
   NO_PROGRESS=$(printf '%s' "$LAST_LINE" | sed -n 's/.*consecutive_no_progress=\([0-9][0-9]*\).*/\1/p' | head -1)
+  [ -n "$NO_PROGRESS" ] || NO_PROGRESS=$(printf '%s' "$LAST_LINE" | sed -n 's/.*no_progress_streak=\([0-9][0-9]*\).*/\1/p' | head -1)
   JUDGEMENT=$(printf '%s' "$LAST_LINE" | sed -n 's/.*judgement=\([A-Za-z_]*\).*/\1/p' | head -1)
   BANNER=$(printf '%s' "$LAST_LINE" | sed -n 's/.*banner=\([A-Za-z_-]*\).*/\1/p' | head -1)
   # 중계기는 감독 화면만 본다. 작업자가 도는 동안 감독이 조용한 것은 정상이므로,
@@ -196,6 +231,158 @@ parse_last_line() {
   [ -n "$ACTIVE_DISPATCHED" ] || ACTIVE_DISPATCHED=""
 }
 
+# B7(2026-08-09): 판의 카드 장부(task-list)를 읽어 대기·발령·미결 카드 수를 센다.
+# Why: 작업자가 다 끝났는데 감독이 다음 행동을 안 하면 중계기는 순찰 일기를 갱신하지
+# 않는다. 신고기가 숫자를 읽을 수 없어 조용해진다. 그래서 신고기가 판 장부를 직접 본다.
+#
+# F-B7(2026-08-09 수정 2): 예전에는 `ok` 를 보지 않고 `result.tasks` 를 그대로 믿었다.
+# 그래서 조회가 실패해 `ok=false` 로 돌아와도 "카드 0장"으로 읽혀 "판이 비었다"는 경고가
+# 나갔다. 오늘 이 판이 열한 시간 멈춘 부류가 정확히 이것이다 — 없다고 읽혀서 조용히
+# 넘어가는 것. 그래서 fail-closed 로 바꾼다: 조회가 조금이라도 수상하면 판정하지 않고
+# 판정 불가(CARD_QUERY_STATE=failed)로 내보낸다.
+#
+# CARD_QUERY_STATE 세 값:
+#   disabled - --project-run 이 없어 카드 감시 자체를 안 켰다(정상, 조용히 넘어감)
+#   failed   - 조회했지만 믿을 수 없다(판정 금지)
+#   ok       - 숫자를 믿어도 된다
+CARD_QUERY_STATE=disabled
+CARD_IDLE_COUNT=0
+CARD_DISPATCHED_COUNT=0
+CARD_OUTSTANDING_COUNT=0
+CARD_TOTAL_COUNT=0
+CARD_QUERY_REASON=""
+CARD_QUERY_UNKNOWN_STATUSES_JSON="[]"
+# 카드 판정의 정식 값 집합이다. unavailable은 오류 코드가 아니라 A/B/C/active와
+# 나란히 놓이는 결과값이다. 소비자는 이 값을 보고 다시 측정하며 A/B/C로 추정하지 않는다.
+CARD_CLASSIFICATION=not_measured
+count_cards() {
+  CARD_QUERY_STATE=disabled
+  CARD_IDLE_COUNT=0
+  CARD_DISPATCHED_COUNT=0
+  CARD_OUTSTANDING_COUNT=0
+  CARD_TOTAL_COUNT=0
+  CARD_QUERY_REASON=""
+  CARD_QUERY_UNKNOWN_STATUSES_JSON="[]"
+  CARD_CLASSIFICATION=not_measured
+  [ -n "$PROJECT_RUN_ID" ] || return 0
+  # 여기부터는 "조회를 시도했다". 무엇 하나라도 어긋나면 failed 로 남긴 채 돌아간다.
+  CARD_QUERY_STATE=failed
+  local output parsed
+  CARD_QUERY_REASON="cli_error"
+  output=$( "$ORCA_BIN" orchestration task-list --run "$PROJECT_RUN_ID" --json 2>/dev/null ) || return 0
+  CARD_QUERY_REASON="empty_output"
+  [ -n "$output" ] || return 0
+  CARD_QUERY_REASON="unusable_response"
+  parsed=$(printf '%s' "$output" | python3 -c '
+import json,sys
+try:
+    root=json.load(sys.stdin)
+except Exception:
+    raise SystemExit(1)
+if not isinstance(root,dict):
+    raise SystemExit(1)
+# fail-closed 1: ok 가 참이 아니면(거짓이든 아예 없든) 응답 내용을 쓰지 않는다.
+if root.get("ok") is not True:
+    raise SystemExit(1)
+result=root.get("result")
+if not isinstance(result,dict):
+    raise SystemExit(1)
+tasks=result.get("tasks")
+if not isinstance(tasks,list):
+    raise SystemExit(1)
+IDLE={"pending","ready"}
+# 종결 상태: 판의 진행 루프가 더 이상 기다리지 않는 카드.
+TERMINAL={"completed","failed","cancelled","canceled","skipped","superseded"}
+OUTSTANDING={"blocked"}
+KNOWN=IDLE | {"dispatched"} | TERMINAL | OUTSTANDING
+idle=dispatched=outstanding=0
+unknown=[]
+for t in tasks:
+    # fail-closed 2: 줄 하나라도 모양이 깨졌으면 전체를 못 믿는다.
+    if not isinstance(t,dict):
+        raise SystemExit(1)
+    s=t.get("status")
+    if not isinstance(s,str) or not s:
+        raise SystemExit(1)
+    if s not in KNOWN:
+        unknown.append(s)
+    elif s in IDLE:
+        idle+=1
+    elif s=="dispatched":
+        dispatched+=1
+    elif s in TERMINAL:
+        pass
+    elif s in OUTSTANDING:
+        outstanding+=1
+if unknown:
+    # 상태 미상은 미결로 추정하지 않는다. 원문 값을 JSON으로 보존해 호출자가
+    # 조회 실패와 구분해 기록하고, A/B/C 어느 판정도 하지 못하게 한다.
+    print("unknown_status")
+    print(json.dumps(sorted(set(unknown)),ensure_ascii=True,separators=(",",":")))
+else:
+    print("ok")
+    print("%d\n%d\n%d\n%d" % (idle,dispatched,outstanding,len(tasks)))
+' 2>/dev/null) || return 0
+  local parse_state idle dispatched outstanding total _n
+  parse_state=$(printf '%s' "$parsed" | sed -n '1p')
+  if [ "$parse_state" = unknown_status ]; then
+    CARD_QUERY_REASON="unknown_status"
+    CARD_QUERY_UNKNOWN_STATUSES_JSON=$(printf '%s' "$parsed" | sed -n '2p')
+    [ -n "$CARD_QUERY_UNKNOWN_STATUSES_JSON" ] || CARD_QUERY_UNKNOWN_STATUSES_JSON='["unavailable"]'
+    CARD_QUERY_STATE=ok
+    CARD_CLASSIFICATION=unavailable
+    return 0
+  fi
+  [ "$parse_state" = ok ] || return 0
+  idle=$(printf '%s' "$parsed" | sed -n '2p')
+  dispatched=$(printf '%s' "$parsed" | sed -n '3p')
+  outstanding=$(printf '%s' "$parsed" | sed -n '4p')
+  total=$(printf '%s' "$parsed" | sed -n '5p')
+  CARD_QUERY_REASON="unparsable_counts"
+  for _n in "$idle" "$dispatched" "$outstanding" "$total"; do
+    case "$_n" in ''|*[!0-9]*) return 0 ;; esac
+  done
+  CARD_IDLE_COUNT="$idle"
+  CARD_DISPATCHED_COUNT="$dispatched"
+  CARD_OUTSTANDING_COUNT="$outstanding"
+  CARD_TOTAL_COUNT="$total"
+  CARD_QUERY_REASON=""
+  CARD_QUERY_STATE=ok
+  if [ "$CARD_DISPATCHED_COUNT" -gt 0 ]; then
+    CARD_CLASSIFICATION=active
+  elif [ "$CARD_IDLE_COUNT" -gt 0 ]; then
+    CARD_CLASSIFICATION=A
+  elif [ "$CARD_OUTSTANDING_COUNT" -gt 0 ]; then
+    CARD_CLASSIFICATION=C
+  else
+    CARD_CLASSIFICATION=B
+  fi
+}
+
+# 조회가 몇 번 연속 실패하면 사람에게 알릴지. 3회로 잡은 근거: Orca 앱 재시작이나 일시적
+# 잠금 때문에 한두 번 어긋나는 것은 다음 순찰에서 저절로 회복된다. 3주기 연속 실패는
+# 그 시간 내내 신고기가 판을 못 본 것이므로, 침묵하면 "감시가 있다"는 착각만 남는다.
+# 알림은 사건당 한 번이고, 조회가 한 번이라도 성공하면 다시 장전된다.
+CARD_QUERY_FAIL_LIMIT=3
+
+# 판 비움 세 경우 중 하나를 재장전한다. 이미 깨끗하면 아무것도 하지 않는다.
+# $1 = A|B|C, $2 = 로그에 남길 사유
+rearm_board_case() {
+  case "$1" in
+    A)
+      { [ "$BOARD_CASE_A_SINCE" -ne 0 ] || [ "$BOARD_CASE_A_ALERTED" -ne 0 ]; } || return 0
+      BOARD_CASE_A_SINCE=0; BOARD_CASE_A_ALERTED=0 ;;
+    B)
+      { [ "$BOARD_CASE_B_SINCE" -ne 0 ] || [ "$BOARD_CASE_B_ALERTED" -ne 0 ]; } || return 0
+      BOARD_CASE_B_SINCE=0; BOARD_CASE_B_ALERTED=0 ;;
+    C)
+      { [ "$BOARD_CASE_C_SINCE" -ne 0 ] || [ "$BOARD_CASE_C_ALERTED" -ne 0 ]; } || return 0
+      BOARD_CASE_C_SINCE=0; BOARD_CASE_C_ALERTED=0 ;;
+    *) return 0 ;;
+  esac
+  save_state
+  log "rearm board_case_$1 $2"
+}
 # 이번 정체 사건에서 알려야 할 임계값을 고른다. 이미 알린 것보다 큰 것만 고른다.
 next_threshold_reached() {
   local n="$1" t highest=0
@@ -359,6 +546,162 @@ $WAKER_ACTION
     WAKER_SILENT_ALERTED=0
     save_state
     log "rearm supervisor_waker_recovered silent_for=${WAKER_SILENT_FOR}s"
+  fi
+
+  # 사건 3~5. 판 비움 감지 (2026-08-09 B7, F-B7에서 세 경우로 분리).
+  # Why: 작업자가 다 끝났는데 감독이 다음 행동을 안 하는 상태를 어느 장치도 못 잡았다.
+  # 중계기는 active_dispatched=0일 때 순찰 일기를 갱신하지 않으므로 신고기가 숫자를 읽을
+  # 수 없어 조용했다. 그래서 신고기가 판의 카드 장부를 직접 본다(판정도 여기서 한다 —
+  # pipeline_gap은 랠리 내 공백을 잡는 다른 신호라 재활용하지 않는다, B7 검토 결론).
+  count_cards
+  if [ "$CARD_QUERY_STATE" = failed ]; then
+    # F-B7 수정 2: 조회 실패는 판정하지 않는다. 여기서 경우 A/B/C 상태를 건드리지 않는
+    # 것이 핵심이다 — 실패를 "판이 비었다"로도, "정상으로 돌아왔다"로도 접지 않고 그대로
+    # 얼려 둔다. 조회가 회복되면 그때 원래 상태에서 이어서 판정한다.
+    CARD_QUERY_FAIL_STREAK=$(( CARD_QUERY_FAIL_STREAK + 1 ))
+    save_state
+    log "card_query_failed reason=${CARD_QUERY_REASON:-unknown} unknown_statuses=$CARD_QUERY_UNKNOWN_STATUSES_JSON streak=$CARD_QUERY_FAIL_STREAK limit=$CARD_QUERY_FAIL_LIMIT (판정 보류)"
+    if [ "$CARD_QUERY_FAIL_STREAK" -ge "$CARD_QUERY_FAIL_LIMIT" ] && [ "$CARD_QUERY_FAIL_ALERTED" -eq 0 ]; then
+      send_alert "[정체신고] 판 장부를 읽지 못한다 — 판정 불가 — $BOARD" \
+"신고기가 판의 카드 장부(task-list)를 ${CARD_QUERY_FAIL_STREAK}회 연속으로 읽지 못했다. 판이 비었는지 아닌지 판정할 수 없는 상태다.
+
+판: $PROJECT / $BOARD
+프로젝트 Run: $PROJECT_RUN_ID
+실패 사유(마지막): ${CARD_QUERY_REASON:-불명}
+모르는 상태값: $CARD_QUERY_UNKNOWN_STATUSES_JSON
+연속 실패 횟수: ${CARD_QUERY_FAIL_STREAK}회 (임계값 ${CARD_QUERY_FAIL_LIMIT}회)
+
+이 알림은 \"판이 비었다\"가 아니다. \"판이 비었는지 알 수 없다\"다. 조회 실패를 카드 0장으로 접으면 멈춘 판이 끝난 판으로 보이므로, 신고기는 실패 동안 판 비움 판정을 아예 하지 않는다.
+장부를 직접 확인하라: orca orchestration task-list --run $PROJECT_RUN_ID --json
+조회가 한 번이라도 성공하면 자동으로 재장전된다." \
+"{\"event\":\"board_scan_unavailable\",\"project\":\"$PROJECT\",\"board\":\"$BOARD\",\"projectRunId\":\"$PROJECT_RUN_ID\",\"reason\":\"${CARD_QUERY_REASON:-unknown}\",\"unknownStatuses\":$CARD_QUERY_UNKNOWN_STATUSES_JSON,\"failStreak\":$CARD_QUERY_FAIL_STREAK}"
+      CARD_QUERY_FAIL_ALERTED=1; save_state
+      log "alert board_scan_unavailable streak=$CARD_QUERY_FAIL_STREAK reason=${CARD_QUERY_REASON:-unknown} unknown_statuses=$CARD_QUERY_UNKNOWN_STATUSES_JSON"
+    fi
+  elif [ "$CARD_QUERY_STATE" = ok ]; then
+    if [ "$CARD_QUERY_FAIL_STREAK" -ne 0 ] || [ "$CARD_QUERY_FAIL_ALERTED" -ne 0 ]; then
+      CARD_QUERY_FAIL_STREAK=0; CARD_QUERY_FAIL_ALERTED=0; save_state
+      log "rearm board_scan_recovered"
+    fi
+    if [ "$CARD_CLASSIFICATION" = unavailable ]; then
+      # 상태 미상은 조회 실패가 아니다. 조회는 성공했고, 카드 판정의 정식 결과가
+      # unavailable이다. A/B/C 상태를 얼린 채 다음 주기에 다시 측정한다.
+      CARD_CLASSIFICATION_UNAVAILABLE_STREAK=$(( CARD_CLASSIFICATION_UNAVAILABLE_STREAK + 1 ))
+      save_state
+      log "card_classification=unavailable reason=unknown_status unknown_statuses=$CARD_QUERY_UNKNOWN_STATUSES_JSON streak=$CARD_CLASSIFICATION_UNAVAILABLE_STREAK next_action=remeasure"
+      if [ "$CARD_CLASSIFICATION_UNAVAILABLE_STREAK" -ge "$CARD_QUERY_FAIL_LIMIT" ] && [ "$CARD_CLASSIFICATION_UNAVAILABLE_ALERTED" -eq 0 ]; then
+        send_alert "[정체신고] 모르는 카드 상태 — 판정 불가 — $BOARD" \
+"카드 장부 조회는 성공했지만 아는 상태 집합에 없는 값이 있어 판정을 만들 수 없다.
+
+판정값: unavailable (판정 불가)
+원인: unknown_status
+모르는 상태값: $CARD_QUERY_UNKNOWN_STATUSES_JSON
+다음 행동: 장부를 다시 측정한다. A/B/C 어느 경우로도 추정하지 않는다.
+장부 확인: orca orchestration task-list --run $PROJECT_RUN_ID --json" \
+"{\"event\":\"board_scan_unavailable\",\"classification\":\"unavailable\",\"project\":\"$PROJECT\",\"board\":\"$BOARD\",\"projectRunId\":\"$PROJECT_RUN_ID\",\"reason\":\"unknown_status\",\"unknownStatuses\":$CARD_QUERY_UNKNOWN_STATUSES_JSON,\"nextAction\":\"remeasure\",\"streak\":$CARD_CLASSIFICATION_UNAVAILABLE_STREAK}"
+        CARD_CLASSIFICATION_UNAVAILABLE_ALERTED=1; save_state
+        log "alert board_scan_unavailable classification=unavailable reason=unknown_status unknown_statuses=$CARD_QUERY_UNKNOWN_STATUSES_JSON"
+      fi
+    else
+    if [ "$CARD_CLASSIFICATION_UNAVAILABLE_STREAK" -ne 0 ] || [ "$CARD_CLASSIFICATION_UNAVAILABLE_ALERTED" -ne 0 ]; then
+      CARD_CLASSIFICATION_UNAVAILABLE_STREAK=0; CARD_CLASSIFICATION_UNAVAILABLE_ALERTED=0; save_state
+      log "rearm card_classification_recovered classification=$CARD_CLASSIFICATION"
+    fi
+    # F-B7 수정 1: 세 경우를 명시적으로 가른다. 어느 것도 다른 것으로 접히지 않는다.
+    #   발령 > 0            -> 정상 (셋 다 재장전)
+    #   대기 > 0, 발령 0    -> 경우 A
+    #   대기 0, 발령 0, 미결 > 0 -> 경우 C  (다음 요청이 남아 있다)
+    #   대기 0, 발령 0, 미결 0   -> 경우 B  (다음 요청도 없다)
+    if [ "$CARD_CLASSIFICATION" = active ]; then
+      rearm_board_case A "dispatched=$CARD_DISPATCHED_COUNT"
+      rearm_board_case B "dispatched=$CARD_DISPATCHED_COUNT"
+      rearm_board_case C "dispatched=$CARD_DISPATCHED_COUNT"
+    elif [ "$CARD_CLASSIFICATION" = A ]; then
+      # 경우 A: 대기 카드 있음 + 발령 0 → "감독이 발령을 안 하고 있다".
+      rearm_board_case B "idle_appeared=$CARD_IDLE_COUNT"
+      rearm_board_case C "idle_appeared=$CARD_IDLE_COUNT"
+      if [ "$BOARD_CASE_A_SINCE" -eq 0 ]; then
+        BOARD_CASE_A_SINCE=$NOW; save_state
+        log "board_case_a_start idle=$CARD_IDLE_COUNT dispatched=0"
+      fi
+      BOARD_A_AGE=$(( NOW - BOARD_CASE_A_SINCE ))
+      if [ "$BOARD_A_AGE" -ge "$BOARD_IDLE_SEC" ] && [ "$BOARD_CASE_A_ALERTED" -eq 0 ]; then
+        send_alert "[정체신고] 감독이 발령을 안 하고 있다 — $BOARD" \
+"대기 카드 ${CARD_IDLE_COUNT}장이 판에 있는데 발령된 카드가 0개다. 감독이 멈춰서 아무에게도 일을 주지 않고 있다.
+
+판: $PROJECT / $BOARD
+대기 카드(발령 대기): ${CARD_IDLE_COUNT}장
+발령된 카드(실행 중): 0장
+미결 카드(끝나지도 대기도 아님): ${CARD_OUTSTANDING_COUNT}장
+전체 카드: ${CARD_TOTAL_COUNT:-불명}장
+이 상태 지속: ${BOARD_A_AGE}초 (임계값 ${BOARD_IDLE_SEC}초)
+
+중계기는 발령이 없으면 순찰 일기를 갱신하지 않으므로 이 상태를 스스로 잡지 못한다. 신고기가 판 장부를 직접 읽어 보낸다.
+감독이 카드를 발령하면 자동으로 재장전된다." \
+"{\"event\":\"board_case_a\",\"project\":\"$PROJECT\",\"board\":\"$BOARD\",\"idleCards\":$CARD_IDLE_COUNT,\"dispatchedCards\":0,\"outstandingCards\":$CARD_OUTSTANDING_COUNT,\"totalCards\":${CARD_TOTAL_COUNT:-0},\"ageSec\":$BOARD_A_AGE}"
+        BOARD_CASE_A_ALERTED=1; save_state
+        log "alert board_case_a idle=$CARD_IDLE_COUNT age=${BOARD_A_AGE}s"
+      fi
+    elif [ "$CARD_CLASSIFICATION" = C ]; then
+      # 경우 C: 대기 0 + 발령 0인데 미결 카드가 남았다 → "다음 요청은 있는데 안 돈다".
+      # 이 경우를 경우 B로 접으면 "할 일이 남았는데 안 도는 상태"가 "다 끝난 상태"로
+      # 보고된다. 감독이 해야 할 행동도 다르다 — 새 카드를 만드는 게 아니라 막힌 카드를
+      # 푸는 것이다. 그래서 문구를 완전히 분리한다.
+      rearm_board_case A "outstanding=$CARD_OUTSTANDING_COUNT"
+      rearm_board_case B "outstanding=$CARD_OUTSTANDING_COUNT"
+      if [ "$BOARD_CASE_C_SINCE" -eq 0 ]; then
+        BOARD_CASE_C_SINCE=$NOW; save_state
+        log "board_case_c_start outstanding=$CARD_OUTSTANDING_COUNT idle=0 dispatched=0"
+      fi
+      BOARD_C_AGE=$(( NOW - BOARD_CASE_C_SINCE ))
+      if [ "$BOARD_C_AGE" -ge "$BOARD_IDLE_SEC" ] && [ "$BOARD_CASE_C_ALERTED" -eq 0 ]; then
+        send_alert "[정체신고] 미결 카드가 남았는데 아무도 안 돌고 있다 — $BOARD" \
+"판이 빈 게 아니다. 미결 카드 ${CARD_OUTSTANDING_COUNT}장이 남아 있는데 대기 카드도 발령된 카드도 0개다. 다음 요청은 판에 있는데 아무도 그것을 돌리지 않는다.
+
+판: $PROJECT / $BOARD
+대기 카드(발령 대기): 0장
+발령된 카드(실행 중): 0장
+미결 카드(끝나지도 대기도 아님): ${CARD_OUTSTANDING_COUNT}장
+전체 카드: ${CARD_TOTAL_COUNT:-불명}장
+이 상태 지속: ${BOARD_C_AGE}초 (임계값 ${BOARD_IDLE_SEC}초)
+
+이것은 \"다 끝났다\"가 아니다. 미결 카드는 막힌 카드(앞 카드 대기)이거나 신고기가 모르는 상태의 카드다. 새 카드를 만들 게 아니라 그 카드가 왜 못 도는지를 먼저 보라.
+장부를 직접 확인하라: orca orchestration task-list --run $PROJECT_RUN_ID --json
+카드가 발령되거나 대기 상태로 풀리면 자동으로 재장전된다." \
+"{\"event\":\"board_case_c\",\"project\":\"$PROJECT\",\"board\":\"$BOARD\",\"idleCards\":0,\"dispatchedCards\":0,\"outstandingCards\":$CARD_OUTSTANDING_COUNT,\"totalCards\":${CARD_TOTAL_COUNT:-0},\"ageSec\":$BOARD_C_AGE}"
+        BOARD_CASE_C_ALERTED=1; save_state
+        log "alert board_case_c outstanding=$CARD_OUTSTANDING_COUNT age=${BOARD_C_AGE}s"
+      fi
+    elif [ "$CARD_CLASSIFICATION" = B ]; then
+      # 경우 B: 대기 0 + 발령 0 + 미결 0 → 판이 진짜로 비었다.
+      rearm_board_case A "board_emptied"
+      rearm_board_case C "board_emptied"
+      if [ "$BOARD_CASE_B_SINCE" -eq 0 ]; then
+        BOARD_CASE_B_SINCE=$NOW; save_state
+        log "board_case_b_start idle=0 dispatched=0 outstanding=0"
+      fi
+      BOARD_B_AGE=$(( NOW - BOARD_CASE_B_SINCE ))
+      if [ "$BOARD_B_AGE" -ge "$BOARD_IDLE_SEC" ] && [ "$BOARD_CASE_B_ALERTED" -eq 0 ]; then
+        send_alert "[정체신고] 감독이 다음 카드를 요청하지 않고 있다 — $BOARD" \
+"판이 완전히 비었다 — 대기 카드도 발령된 카드도 미결 카드도 0개다. 다음 카드 요청이 ${BOARD_B_AGE}초 동안 없었다. 감독이 다음 카드를 만들지 않고 있다.
+
+판: $PROJECT / $BOARD
+대기 카드(발령 대기): 0장
+발령된 카드(실행 중): 0장
+미결 카드(끝나지도 대기도 아님): 0장
+전체 카드: ${CARD_TOTAL_COUNT:-불명}장
+이 상태 지속: ${BOARD_B_AGE}초 (임계값 ${BOARD_IDLE_SEC}초)
+
+정상 유휴(진짜로 다 끝난 상태)와 구분하기 위해 임계값(${BOARD_IDLE_SEC}초) 동안 기다렸다. 그래도 새 카드가 없으면 이상으로 본다.
+감독이 다음 카드를 요청(또는 판 종료)하면 자동으로 재장전된다." \
+"{\"event\":\"board_case_b\",\"project\":\"$PROJECT\",\"board\":\"$BOARD\",\"idleCards\":0,\"dispatchedCards\":0,\"outstandingCards\":0,\"totalCards\":${CARD_TOTAL_COUNT:-0},\"ageSec\":$BOARD_B_AGE}"
+        BOARD_CASE_B_ALERTED=1; save_state
+        log "alert board_case_b age=${BOARD_B_AGE}s"
+      fi
+    else
+      log "card_classification_contract_error value=$CARD_CLASSIFICATION (판정 보류)"
+    fi
+    fi
   fi
 
   [ "$ONCE" -eq 1 ] && break

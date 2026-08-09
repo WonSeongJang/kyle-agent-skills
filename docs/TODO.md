@@ -164,3 +164,11 @@ bash scripts/validate.sh
   사람용 표시(필터 + 10분/20분 경고, 중계기 일기 문턱 600/1200초 재사용)를 넣었고,
   중계기나 companion 이 같은 대조로 감독을 1회 깨우는 자동화는 미구현이다.
   B2 커서 계약이 생기면 "감독에게 미도달"로 기준을 바꾼다.
+
+- [x] `test-conductor-companion.sh` 흔들림(flaky) — 2026-08-09 F-B7에서 원인 확정·수정. 원인은 시험 창(`WATCH_DEADLINE_SEC=1`)이 짧아 companion이 기동만 하다 끝나면 우편함 조회를 한 번도 못 하고 `acks.log`가 아예 안 생기는 것. 부하 11인 맥에서 같은 케이스 20회 중 1회 재현(5%). 이제 "한 주기도 못 돈 실행"은 실패가 아니라 다시 재고(최대 3회, 재시도마다 화면에 남김), 3회를 넘으면 `COMPANION_NEVER_POLLED`로 이름을 붙여 실패한다.
+
+- [ ] 시험에서 "결과물 파일이 있을지 없을지 모르는 자리"를 조건 없이 읽는 곳이 아직 남아 있다 (2026-08-09 F-B7 조사). `acks.log` 계열 17자리는 고쳤고, 같은 부류로 남은 것은 아래다. 부재를 0건으로 읽으면 "안 생겼다"가 "생겼는데 비었다"로 둔갑한다.
+  - `test-relay-headless.sh:69` — `wc -l < "$state_dir/stub-calls.log"`
+  - `test-relay-shadow.sh:118` — `wc -l < "$state_dir/shadow.log"`
+  - `test-relay-shadow.sh:738,741,745,748` — `cat "$state_dir/shadow-state.json"`
+  (나머지 `open(sys.argv[N])` 다수는 그 시험이 방금 직접 쓴 JSON을 되읽는 자리라 같은 부류가 아니다 — 없으면 그것 자체가 진짜 결함이다.)
