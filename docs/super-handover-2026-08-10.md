@@ -332,8 +332,78 @@ uptime; memory_pressure | tail -1; sysctl vm.swapusage
 
 ## 9. 모름으로 남긴 것
 
-- 현재 Monitor(`bt2kla2d8`)의 **명령 원문을 이 문서에 옮기지 못했다.** `TaskStop` 출력에 원문이
-  찍히므로, 멈추기 전에 그 출력을 보관해야 한다.
+- ~~현재 Monitor의 명령 원문을 못 옮겼다~~ → **해소됨.** 세션 종료 정리 중 `TaskStop` 출력에서
+  원문을 확보해 §부록에 그대로 붙였다. 새 세션은 그것으로 같은 감시를 다시 걸 수 있다.
 - 판B 감독의 정확한 Context 추이(압축이 실제로 도는지)는 **2회 관측을 못 채웠다.** 82% 한 점만 있다.
 - `잠든 판 26개` 각각의 장부-실물 정합성은 **확인하지 않았다.**
 - 헤드리스 중계기 vs luna의 **비교 결론을 못 냈다.** 원자료는 판B 일기에 쌓여 있다.
+  (`.orca/relay-logs/mailbox-relay-1.relay-log.md` 의 `| patrol |` 줄 = 헤드리스, 나머지 = luna)
+  **헤드리스 프로세스는 세션 종료 정리로 껐다**(아래 §10). 원자료는 그대로 남아 있으니 비교는 가능하다.
+
+
+---
+
+## 10. 세션 종료 정리 (2026-08-10 23:0x)
+
+kyle 지시로 이 세션이 띄운 것만 정확한 PID로 껐다.
+
+| 대상 | 조치 | 근거 |
+|---|---|---|
+| `relay-patrol.py` PID 36410 (판B 헤드리스 중계기 시험) | **껐다** | 끄기 전 판B luna 중계기가 `live=true`(`term_f6408d4a…`, gpt-5.6-luna)임을 확인 — 감시 공백 없음 |
+| 하네스 Monitor `bt2kla2d8` | **껐다** | 세션과 함께 끝나는 것이라 남겨둘 수 없다. 명령 원문은 아래 부록 |
+| companion PID 24635 (판B) · PID 53051 (판A) | **남겼다** | 끄면 판이 편지를 받아도 안 깨어난다 |
+| opencodex 프록시 PID 57081 | **남겼다** | 모든 codex 작업자가 거친다. 죽으면 502로 작업자가 죽는다 |
+| `board_test` companion (PPID≠1) | **안 건드렸다** | 다른 세션의 회귀 시험 |
+
+파일은 하나도 지우지 않았다. 삭제는 kyle 몫이다. 남아 있는 산출물:
+`.orca/relay-patrol-headless.out` · `.orca/companion-mailbox-relay-1.out` ·
+`.staging/relay-patrol-test-20260810/`
+
+### 부록 — 슈퍼 감시 Monitor 명령 원문
+
+새 세션이 같은 감시를 걸려면 이걸 그대로 쓰면 된다. **`ME` 는 죽은 옛 handle이므로
+그 조건은 사실상 안 걸린다.** `run:run_b58669d80d88` 조건만 유효하다(§1 참고) —
+새 세션 handle로 바꾸거나 그 조건을 빼도 된다.
+
+```bash
+DB="/Users/fw_m1/Library/Application Support/Orca Kyle/orchestration.db"
+ME="term_671919bc-5a12-4c2f-9fca-2bec648cd6a4"   # 죽은 handle — 새 것으로 교체 권장
+LAST=$(sqlite3 -readonly "$DB" "select coalesce(max(sequence),0) from messages;" 2>/dev/null || echo 0)
+PREV_L=init; PREV_M=ok; PREV_P=ok; PREV_C=init; HIGH=0
+while true; do
+  sleep 30
+  CUR=$(sqlite3 -readonly "$DB" "select coalesce(max(sequence),0) from messages;" 2>/dev/null) || continue
+  [ -z "$CUR" ] && continue
+  if [ "$CUR" -gt "$LAST" ]; then
+    sqlite3 -readonly "$DB" "select '[편지 '||case when to_handle like 'run:%' then '판주소' else '내handle' end||'] '||type||' | '||substr(subject,1,105) from messages where sequence>$LAST and (to_handle='run:run_b58669d80d88' or to_handle='$ME') and from_handle<>'$ME' and type<>'heartbeat';" 2>/dev/null
+    LAST=$CUR
+  fi
+  set -- $(uptime | sed 's/.*averages: //' | tr -d ',')
+  L1=$(printf '%.0f' "$1" 2>/dev/null); L5=$(printf '%.0f' "$2" 2>/dev/null)
+  M=$(memory_pressure 2>/dev/null | grep -o '[0-9]*%' | tail -1 | tr -d '%')
+  P=$(ps -Ao pid= | wc -l | tr -d ' ')
+  C=$(ps -Ao ppid=,command= | grep "[c]onductor-companion.sh" | awk '$1==1' | grep -o '\-\-board [a-zA-Z0-9_-]*' | sort -u | wc -l | tr -d ' ')
+  [ -z "$L1" ] && continue
+  [ "$L1" -ge 12 ] && HIGH=$((HIGH+1))
+  SL=$PREV_L
+  [ "$HIGH" -ge 2 ] && SL=bad
+  # 해제는 1분과 5분이 모두 내려와야 한다 — 1분만 보면 5분이 15인데도 풀린다 (2026-08-10 실측)
+  if [ "$L1" -le 9 ] && [ -n "$L5" ] && [ "$L5" -le 11 ]; then HIGH=0; SL=ok; fi
+  [ "$PREV_L" = init ] && [ "$SL" = init ] && SL=ok
+  SM=ok; [ -n "$M" ] && [ "$M" -le 25 ] && SM=bad
+  SP=ok; [ -n "$P" ] && [ "$P" -ge 1600 ] && SP=bad
+  SC=ok; [ "$C" -eq 0 ] && SC=bad
+  if [ "$SL" != "$PREV_L" ]; then
+    if [ "$SL" = bad ]; then
+      TOP=$(ps -Ao pcpu,comm -r 2>/dev/null | sed -n '2,4p' | awk '{printf "%s(%s%%) ", $2, $1}' | sed 's:/[^ ]*/::g')
+      echo "[관문] 부하 1분 $L1 / 5분 $L5 — 연속 2회 정지선 초과. CPU 상위: $TOP"
+    elif [ "$PREV_L" = bad ]; then
+      echo "[해제] 부하 1분 $L1 / 5분 $L5 — 둘 다 내려옴. 발령 재개 가능"
+    fi
+  fi
+  [ "$SM" != "$PREV_M" ] && { [ "$SM" = bad ] && echo "[관문] 메모리 여유율 ${M}% <= 25%" || echo "[해제] 메모리 여유율 ${M}% — 복귀"; }
+  [ "$SP" != "$PREV_P" ] && { [ "$SP" = bad ] && echo "[관문] 프로세스 $P 개 — 폭주 방향" || echo "[해제] 프로세스 $P 개 — 복귀"; }
+  [ "$SC" != "$PREV_C" ] && { [ "$SC" = bad ] && echo "[관문] 상주 companion 0개 — 편지가 와도 감독이 안 깨어난다" || echo "[해제] 상주 companion 이 붙은 판 ${C}개 — 정상"; }
+  PREV_L=$SL; PREV_M=$SM; PREV_P=$SP; PREV_C=$SC
+done
+```
