@@ -15,6 +15,7 @@ description: Kyle's Orca multi-agent conductor harness. Coordinate parallel codi
 |---|---|---|
 | `references/roster.md` | 엔진 카탈로그(명령의 단일 진실) + 역할 편성표(발탁·effort·폴백·쿼터 — **"누가"**) | 일꾼/검수자 편성 전 |
 | `references/mechanics.md` | 공통 장비: 일꾼 생성→배분·감시(우편함 규칙)→사용량→정리 (전 패턴 공유) | 판 세팅·감시 전 |
+| `references/appointment-template.md` | 임명장 필수 문구 8종 (재발 사고 기반) — **임명장 발부 전 항목 수를 센다** | 감독 임명·교대 전 |
 | `references/standard-flow.md` | 섹션 분해→가재 섹션 검수→보고 (대량 작업용) | 섹션 단위 대량 작업 전 |
 | `references/tiki-taka.md` | 유일한 왕복 루프 + **검수 규칙 원본**(라운드 사다리·LIGHT/HEAVY·래칫) + 배틀 오프닝 + 병렬 랠리 규칙 — **"어떻게"** | **모든 구현 판 시작 전** |
 | `references/commands.md` | 명령어 치트시트 + 조립 공식 | 필요 시 |
