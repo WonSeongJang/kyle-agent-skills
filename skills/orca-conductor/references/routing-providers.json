@@ -16,7 +16,7 @@
           "taskClassPrior": {
             "research": 8
           },
-          "command": "codex -p orca-worker --model 'kimi/k3[1m]' -c model_reasoning_effort=\"low\""
+          "command": "codex -p orca --model 'kimi/k3[1m]' -c model_reasoning_effort=\"low\""
         },
         {
           "id": "kimi/k3[1m]",
@@ -33,7 +33,7 @@
             "openai",
             "anthropic"
           ],
-          "command": "codex -p orca-worker --model 'kimi/k3[1m]' -c model_reasoning_effort=\"max\""
+          "command": "codex -p orca --model 'kimi/k3[1m]' -c model_reasoning_effort=\"max\""
         },
         {
           "id": "kimi/k3[1m]",
@@ -42,7 +42,7 @@
           "quality": 20,
           "harness": "codex",
           "taskClassPrior": {},
-          "command": "codex -p orca-analyst --model 'kimi/k3[1m]' -c model_reasoning_effort=\"high\""
+          "command": "codex -p orca --model 'kimi/k3[1m]' -c model_reasoning_effort=\"high\""
         },
         {
           "id": "kimi/k3[1m]",
@@ -53,7 +53,7 @@
           "taskClassPrior": {},
           "experimental": true,
           "experimentSharePercent": 20,
-          "command": "codex -p orca-analyst --model 'kimi/k3[1m]' -c model_reasoning_effort=\"max\""
+          "command": "codex -p orca --model 'kimi/k3[1m]' -c model_reasoning_effort=\"max\""
         }
       ]
     },
@@ -76,7 +76,7 @@
             "architecture": 6,
             "docs_config": 4
           },
-          "command": "codex -p orca-worker --model zai/glm-5.2 -c model_reasoning_effort=\"medium\"",
+          "command": "codex -p orca --model zai/glm-5.2 -c model_reasoning_effort=\"medium\"",
           "enabled": false
         },
         {
@@ -95,7 +95,7 @@
             "openai",
             "anthropic"
           ],
-          "command": "codex -p orca-worker --model zai/glm-5.2 -c model_reasoning_effort=\"max\""
+          "command": "codex -p orca --model zai/glm-5.2 -c model_reasoning_effort=\"max\""
         },
         {
           "id": "zai/glm-5.2",
@@ -104,7 +104,7 @@
           "quality": 72,
           "harness": "codex",
           "taskClassPrior": {},
-          "command": "codex -p orca-analyst --model zai/glm-5.2 -c model_reasoning_effort=\"high\""
+          "command": "codex -p orca --model zai/glm-5.2 -c model_reasoning_effort=\"high\""
         },
         {
           "id": "zai/glm-5.2",
@@ -115,7 +115,7 @@
           "taskClassPrior": {},
           "experimental": true,
           "experimentSharePercent": 20,
-          "command": "codex -p orca-analyst --model zai/glm-5.2 -c model_reasoning_effort=\"max\""
+          "command": "codex -p orca --model zai/glm-5.2 -c model_reasoning_effort=\"max\""
         }
       ]
     },
@@ -140,7 +140,7 @@
             "security": -5,
             "concurrency": -5
           },
-          "command": "codex -p orca-worker --model gpt-5.6-luna -c model_reasoning_effort=\"xhigh\""
+          "command": "codex -p orca --model gpt-5.6-luna -c model_reasoning_effort=\"xhigh\""
         },
         {
           "id": "gpt-5.6-luna",
@@ -162,7 +162,7 @@
             "openai",
             "anthropic"
           ],
-          "command": "codex -p orca-worker --model gpt-5.6-luna -c model_reasoning_effort=\"max\""
+          "command": "codex -p orca --model gpt-5.6-luna -c model_reasoning_effort=\"max\""
         },
         {
           "id": "gpt-5.6-terra",
@@ -176,7 +176,7 @@
             "concurrency": 4,
             "bugfix": 3
           },
-          "command": "codex -p orca-worker --model gpt-5.6-terra -c model_reasoning_effort=\"high\""
+          "command": "codex -p orca --model gpt-5.6-terra -c model_reasoning_effort=\"high\""
         },
         {
           "id": "gpt-5.6-luna",
@@ -191,7 +191,7 @@
             "security": -6,
             "concurrency": -6
           },
-          "command": "codex -p orca-analyst --model gpt-5.6-luna -c model_reasoning_effort=\"max\""
+          "command": "codex -p orca --model gpt-5.6-luna -c model_reasoning_effort=\"max\""
         },
         {
           "id": "gpt-5.6-sol",
@@ -204,7 +204,7 @@
             "concurrency": 5,
             "architecture": 3
           },
-          "command": "codex -p orca-analyst --model gpt-5.6-sol -c model_reasoning_effort=\"medium\""
+          "command": "codex -p orca --model gpt-5.6-sol -c model_reasoning_effort=\"medium\""
         },
         {
           "id": "gpt-5.6-sol",
@@ -219,7 +219,7 @@
           },
           "experimental": true,
           "experimentSharePercent": 20,
-          "command": "codex -p orca-analyst --model gpt-5.6-sol -c model_reasoning_effort=\"high\""
+          "command": "codex -p orca --model gpt-5.6-sol -c model_reasoning_effort=\"high\""
         },
         {
           "id": "gpt-5.6-sol",
@@ -234,7 +234,7 @@
           },
           "experimental": true,
           "experimentSharePercent": 20,
-          "command": "codex -p orca-analyst --model gpt-5.6-sol -c model_reasoning_effort=\"xhigh\""
+          "command": "codex -p orca --model gpt-5.6-sol -c model_reasoning_effort=\"xhigh\""
         },
         {
           "id": "gpt-5.6-sol",
@@ -249,7 +249,7 @@
           },
           "experimental": true,
           "experimentSharePercent": 20,
-          "command": "codex -p orca-analyst --model gpt-5.6-sol -c model_reasoning_effort=\"max\""
+          "command": "codex -p orca --model gpt-5.6-sol -c model_reasoning_effort=\"max\""
         }
       ]
     },
