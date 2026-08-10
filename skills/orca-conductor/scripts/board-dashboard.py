@@ -164,6 +164,7 @@ def collect(orca: str) -> dict:
     runs = []
     run_names: dict[str, str] = {}
     handle_names: dict[str, str] = {}  # 명패(handle) -> 사람이 읽는 이름
+    task_roles: dict[str, str] = {}    # 카드 id -> "역할 · 카드 · 판" (worker 장부 역추적용)
     if runs_data is None:
         errors.append("run-list 를 못 읽었다 — 판 목록은 비어 있는 게 아니라 '모름'이다.")
     else:
@@ -171,9 +172,11 @@ def collect(orca: str) -> dict:
         for run in runs:
             name = bs.board_name(run.get("objective", ""))
             run_names[run.get("id", "")] = name
-            handle_names[f"run:{run.get('id', '')}"] = f"판 · {name}"
+            handle_names[f"run:{run.get('id', '')}"] = f"판 우편함 · {name}"
             if run.get("coordinator_handle"):
-                handle_names[run["coordinator_handle"]] = f"감독 · {name}"
+                # 슈퍼 run 의 지휘 터미널은 슈퍼감독이다.
+                sup = "슈퍼감독" if "super" in name.lower() else f"감독 · {name}"
+                handle_names[run["coordinator_handle"]] = sup
 
     for run in runs:
         handle = run.get("coordinator_handle")
@@ -224,11 +227,26 @@ def collect(orca: str) -> dict:
                     # 카드를 만드는 것은 감독이다. 교대로 물러난 전임 감독 명패도 이걸로 풀린다.
                     # setdefault — 현직 감독 이름(coordinator_handle 매핑)을 덮지 않는다.
                     handle_names.setdefault(creator, f"감독 · {name}")
+                # 역할 · 카드번호 · 판 형태로 푼다 (kyle: 역할이 보여야 한다).
+                if "중계기" in title or "relay" in title.lower():
+                    role = "중계기"
+                elif "검수" in title:
+                    role = "검수자"
+                else:
+                    role = "작업자"
+                head = title.split()[0] if title.split() else ""
+                short = head if re.fullmatch(r"[\w.\-]+", head) else title[:16]
+                label = f"{role} · {short} · {name}" if role != "중계기" else f"중계기 · {name}"
+                if task.get("id"):
+                    task_roles[task["id"]] = label
                 assignee = task.get("assignee_handle")
                 if assignee:
                     # 나중 카드가 이긴다 — 같은 터미널이 카드를 갈아탄 경우 최신 역할이 이름이 된다.
-                    handle_names[assignee] = f"{title[:28]} · {name}"
-                    if status == "dispatched" and ("중계기" in title or "relay" in title.lower()):
+                    handle_names[assignee] = label
+                    if task.get("dispatch_id"):
+                        # 편지 주소가 dispatch:ctx_... 로 오는 경우도 같은 역할로 풀린다.
+                        handle_names[f"dispatch:{task['dispatch_id']}"] = label
+                    if status == "dispatched" and role == "중계기":
                         relay_handle = assignee
                 tasks.append(
                     {
@@ -277,6 +295,34 @@ def collect(orca: str) -> dict:
             board["relay"] = relay
         out["boards"].append(board)
 
+    # 완료된 카드는 task-list 에 담당 명패가 안 남는다 — worker 장부(worker-list)의
+    # 카드↔터미널 연결로 역추적한다. setdefault 라서 현재 배정(최신 역할)이 항상 이긴다.
+    workers_data = bs.run_json(orca, ["orchestration", "worker-list"])
+    if workers_data is not None:
+        for worker in workers_data.get("result", {}).get("workers") or []:
+            label = task_roles.get(worker.get("taskId"))
+            whandle = worker.get("agentTerminalHandle")
+            if label and whandle:
+                handle_names.setdefault(whandle, label)
+
+    # 그래도 남는 구멍은 원장 DB의 과거 발령 기록(dispatch_contexts)으로 메꾼다.
+    if LEDGER_DB.exists():
+        try:
+            with ledger_conn() as conn:
+                rows = conn.execute(
+                    "SELECT task_id, assignee_handle FROM dispatch_contexts"
+                    " WHERE assignee_handle IS NOT NULL ORDER BY rowid"
+                ).fetchall()
+            past: dict[str, str] = {}
+            for row in rows:
+                label = task_roles.get(row["task_id"])
+                if label:
+                    past[row["assignee_handle"]] = label  # 나중 발령이 이긴다
+            for whandle, label in past.items():
+                handle_names.setdefault(whandle, label)
+        except sqlite3.Error:
+            pass  # 원장을 못 읽어도 이름 풀기만 조금 덜 될 뿐, 화면은 계속 살아 있어야 한다
+
     # 카드 담당 이름까지 다 모은 뒤에야 편지의 보낸이/받는이를 풀 수 있다.
     def resolve_handle(handle: str | None) -> str:
         if not handle:
@@ -284,10 +330,10 @@ def collect(orca: str) -> dict:
         if handle in handle_names:
             return handle_names[handle]
         if terminals and handle in terminals:
-            return f"터미널 {terminals[handle].get('title') or handle[:13]}"
+            return f"터미널 · {terminals[handle].get('title') or handle[:13]}"
         if handle.startswith("term_"):
-            return f"터미널(사라짐) {handle[5:13]}"
-        return handle[:18]
+            return f"터미널(사라짐) · {handle[5:13]}"
+        return handle[:24]
 
     if inbox is not None:
         msgs = inbox.get("result", {}).get("messages") or []
@@ -342,7 +388,14 @@ def collect(orca: str) -> dict:
 
 
 # Orca 오케스트레이션 원장 (SQLite). 읽기 전용(mode=ro)으로만 연다 — 쓰기 불가.
-LEDGER_DB = Path.home() / "Library/Application Support/orca/orchestration.db"
+# 포크(Orca Kyle) DB 를 먼저 본다 — 2026-08-10 실사고: 구 orca DB 를 읽어서
+# 지금 판이 아닌 옛 run 들의 원장을 현재 것처럼 보여줬다 (kyle 의 역할 표시
+# 요청을 파다가 발견). 앱별로 데이터 폴더가 다르다.
+LEDGER_CANDIDATES = [
+    Path.home() / "Library/Application Support/Orca Kyle/orchestration.db",
+    Path.home() / "Library/Application Support/orca/orchestration.db",
+]
+LEDGER_DB = next((p for p in LEDGER_CANDIDATES if p.exists()), LEDGER_CANDIDATES[0])
 LEDGER_ROW_LIMIT = 200
 LEDGER_CELL_MAX = 400
 
@@ -521,6 +574,7 @@ PAGE = """<!doctype html>
 <script>
 let DATA = null;
 let mailFilter = "all";       // 우편함 필터: all | untouched
+let hideRelayMail = true;     // 중계기 일상 편지 숨김 (kyle: 평소엔 우편이 아니라 로그 확인용)
 const openKeys = new Set();   // 새로고침해도 펼친 항목을 유지한다
 
 const $ = (id) => document.getElementById(id);
@@ -551,6 +605,14 @@ function ageSecOf(iso) {
 // 않고 중계기 일기와 같은 600/1200초를 재사용한다.
 const MAIL_WARN_SEC = 600, MAIL_DEAD_SEC = 1200;
 function untouchedSec(m) { return m.read ? null : ageSecOf(m.created_at); }
+
+// 중계기의 일상 통신(순찰 status·감시 갱신·relay_* 답장)은 로그 확인용이지 우편이 아니다.
+// 단 escalation·decision_gate 는 중계기 발신이라도 경보라서 절대 숨기지 않는다.
+function isRelayRoutine(m) {
+  if (m.type === "escalation" || m.type === "decision_gate") return false;
+  const names = (m.from_name || "") + " " + (m.to_name || "");
+  return names.includes("중계기") || /^(re: ?)?relay_/i.test(m.subject || "");
+}
 
 function det(key, summaryText, contentNode) {
   const d = el("details");
@@ -704,7 +766,8 @@ function boardSummaryCard(b) {
   let mine = [];
   if (DATA.messages === null) mail.appendChild(el("span", "bad", "모름 — 우편함을 못 읽었다"));
   else {
-    mine = DATA.messages.filter((m) => m.run_id === b.run_id);
+    // 중계기 일상편지는 판 요약에서도 제외한다 — 경보(escalation·gate)는 isRelayRoutine 이 남긴다.
+    mine = DATA.messages.filter((m) => m.run_id === b.run_id && !isRelayRoutine(m));
     mail.appendChild(el("span", "dim", mine.length ? "최근 3통" : "없음"));
   }
   card.appendChild(mail);
@@ -844,8 +907,13 @@ function pageBoard(main, runId) {
 
   // 이 판의 편지
   const mailCard = el("div", "card");
-  mailCard.appendChild(el("h3", null, "이 판의 편지"));
-  const mine = DATA.messages === null ? null : DATA.messages.filter((m) => m.run_id === b.run_id);
+  const allMine = DATA.messages === null ? null : DATA.messages.filter((m) => m.run_id === b.run_id);
+  const mine = allMine === null ? null
+    : (hideRelayMail ? allMine.filter((m) => !isRelayRoutine(m)) : allMine);
+  const hiddenCnt = allMine === null ? 0 : allMine.length - mine.length;
+  const h3 = el("h3", null, "이 판의 편지 ");
+  if (hiddenCnt) h3.appendChild(el("span", "dim", "(중계기 일상편지 " + hiddenCnt + "통 숨김 — 우편함에서 전환)"));
+  mailCard.appendChild(h3);
   mailCard.appendChild(mailList(mine, "board-" + b.run_id));
   main.appendChild(mailCard);
 }
@@ -910,19 +978,25 @@ function pageMail(main) {
     "'아무도 안 읽음' = 감독·중계기·companion·슈퍼 넷 중 누구도 아직 안 집은 편지 (누가 안 읽었는지 구분은 B2 커서 계약 후)"
     + " · 읽음 처리 없이 보기만 한다 (감독 편지를 안 가로챔)."));
   const bar = el("div", "row");
-  const total = DATA.messages === null ? "?" : DATA.messages.length;
-  const untouchedCnt = DATA.messages === null ? "?" : DATA.messages.filter((m) => !m.read).length;
-  const mkBtn = (key, label) => {
-    const a = el("a", "tag" + (mailFilter === key ? " who" : ""), label);
+  const relayCnt = DATA.messages === null ? 0 : DATA.messages.filter(isRelayRoutine).length;
+  const base = DATA.messages === null ? null
+    : (hideRelayMail ? DATA.messages.filter((m) => !isRelayRoutine(m)) : DATA.messages);
+  const total = base === null ? "?" : base.length;
+  const untouchedCnt = base === null ? "?" : base.filter((m) => !m.read).length;
+  const mkBtn = (active, label, onclick) => {
+    const a = el("a", "tag" + (active ? " who" : ""), label);
     a.href = "javascript:void(0)";
-    a.onclick = () => { mailFilter = key; render(); };
+    a.onclick = onclick;
     return a;
   };
-  bar.appendChild(mkBtn("all", "전체 " + total));
-  bar.appendChild(mkBtn("untouched", "아무도 안 읽음 " + untouchedCnt));
+  bar.appendChild(mkBtn(mailFilter === "all", "전체 " + total, () => { mailFilter = "all"; render(); }));
+  bar.appendChild(mkBtn(mailFilter === "untouched", "아무도 안 읽음 " + untouchedCnt,
+    () => { mailFilter = "untouched"; render(); }));
+  bar.appendChild(mkBtn(!hideRelayMail, (hideRelayMail ? "중계기 일상편지 숨김 " : "중계기 일상편지 표시 ") + relayCnt,
+    () => { hideRelayMail = !hideRelayMail; render(); }));
   main.appendChild(bar);
-  const shown = DATA.messages === null ? null
-    : (mailFilter === "untouched" ? DATA.messages.filter((m) => !m.read) : DATA.messages);
+  const shown = base === null ? null
+    : (mailFilter === "untouched" ? base.filter((m) => !m.read) : base);
   const card = el("div", "card");
   card.appendChild(mailList(shown, "all"));
   main.appendChild(card);
