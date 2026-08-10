@@ -172,10 +172,11 @@ def collect(orca: str) -> dict:
         for run in runs:
             name = bs.board_name(run.get("objective", ""))
             run_names[run.get("id", "")] = name
-            handle_names[f"run:{run.get('id', '')}"] = f"판 우편함 · {name}"
+            sup = "슈퍼감독" if "super" in name.lower() else f"감독 · {name}"
+            # 판 앞(run:) 주소로 온 편지는 결국 그 판의 감독이 소비한다 —
+            # "판 우편함" 표기는 어색하다 (2026-08-10 kyle). 기술 주소는 툴팁에 남는다.
+            handle_names[f"run:{run.get('id', '')}"] = sup
             if run.get("coordinator_handle"):
-                # 슈퍼 run 의 지휘 터미널은 슈퍼감독이다.
-                sup = "슈퍼감독" if "super" in name.lower() else f"감독 · {name}"
                 handle_names[run["coordinator_handle"]] = sup
 
     for run in runs:
@@ -310,7 +311,7 @@ def collect(orca: str) -> dict:
         try:
             with ledger_conn() as conn:
                 rows = conn.execute(
-                    "SELECT task_id, assignee_handle FROM dispatch_contexts"
+                    "SELECT id, task_id, assignee_handle FROM dispatch_contexts"
                     " WHERE assignee_handle IS NOT NULL ORDER BY rowid"
                 ).fetchall()
             past: dict[str, str] = {}
@@ -318,6 +319,7 @@ def collect(orca: str) -> dict:
                 label = task_roles.get(row["task_id"])
                 if label:
                     past[row["assignee_handle"]] = label  # 나중 발령이 이긴다
+                    past[f"dispatch:{row['id']}"] = label  # dispatch:ctx_... 주소도 같은 역할
             for whandle, label in past.items():
                 handle_names.setdefault(whandle, label)
         except sqlite3.Error:
@@ -555,10 +557,20 @@ PAGE = """<!doctype html>
   .tag { display: inline-block; font-size: 11px; border: 1px solid var(--line); background: var(--card2);
          border-radius: 6px; padding: 0 6px; margin-right: 6px; color: var(--dim2); }
   .tag.who { color: var(--text); }
-  .msg { border-top: 1px solid var(--line); padding: 8px 0; }
+  .msg { border-top: 1px solid var(--line); padding: 9px 0; }
   .msg:first-child { border-top: none; }
-  .fromto { font-size: 12px; color: var(--dim2); margin-bottom: 2px; }
-  .fromto b { color: var(--text); font-weight: 500; }
+  .msg-top { display: flex; gap: 8px; align-items: baseline; }
+  .msg-top .subject { flex: 1; min-width: 0; color: var(--text); font-weight: 500;
+                      overflow-wrap: break-word; }
+  .msg-age { white-space: nowrap; font-size: 12px; }
+  .msg-sub { font-size: 12px; color: var(--dim2); margin-top: 2px; }
+  .msg-sub .to { color: var(--text); font-weight: 500; }
+  .chip { display: inline-block; font-size: 11px; border: 1px solid var(--line); background: var(--card2);
+          border-radius: 4px; padding: 0 6px; color: var(--dim2); white-space: nowrap; }
+  .chip.t-done  { color: #8fca97; border-color: #2f4a35; }
+  .chip.t-alert { color: #e8837a; border-color: #5a2f2b; }
+  .chip.t-gate  { color: #e0b13e; border-color: #584a1e; }
+  .chip.t-ask   { color: #6aabee; border-color: #2b4258; }
   .scroll { max-height: 60vh; overflow: auto; }
   @media (max-width: 760px) {
     #layout { display: block; }
@@ -775,7 +787,7 @@ function boardSummaryCard(b) {
     const urgent = m.type === "escalation" || m.type === "decision_gate";
     const stale = (untouchedSec(m) || 0) > MAIL_WARN_SEC;
     card.appendChild(el("div", "row " + (stale || urgent ? "warn" : "dim"),
-      "   ▸ " + ageOf(m.created_at) + " · " + m.type + " · " + (m.subject || "(제목 없음)")
+      "   ▸ " + ageOf(m.created_at) + " · " + msgType(m.type).ko + " · " + (m.subject || "(제목 없음)")
       + (stale ? " · 아무도 안 읽음 ⚠" : "")));
   }
 
@@ -914,7 +926,7 @@ function pageBoard(main, runId) {
   const h3 = el("h3", null, "이 판의 편지 ");
   if (hiddenCnt) h3.appendChild(el("span", "dim", "(중계기 일상편지 " + hiddenCnt + "통 숨김 — 우편함에서 전환)"));
   mailCard.appendChild(h3);
-  mailCard.appendChild(mailList(mine, "board-" + b.run_id));
+  mailCard.appendChild(mailList(mine, "board-" + b.run_id, false));
   main.appendChild(mailCard);
 }
 
@@ -945,27 +957,46 @@ function taskTable(tasks) {
   return table;
 }
 
-function mailList(msgs, keyPrefix) {
+const MSG_TYPES = {
+  worker_done:   { ko: "완료", cls: "t-done" },
+  escalation:    { ko: "경보", cls: "t-alert" },
+  decision_gate: { ko: "관문", cls: "t-gate" },
+  ask:           { ko: "질문", cls: "t-ask" },
+  reply:         { ko: "답장", cls: "t-ask" },
+  status:        { ko: "상태", cls: "" },
+  heartbeat:     { ko: "생존", cls: "" },
+};
+const msgType = (t) => MSG_TYPES[t] || { ko: t, cls: "" };
+// 역할 이름 끝의 " · 판이름"은 판 칩과 중복이라 떼고 보여준다.
+function roleShort(name, board) {
+  const suffix = " · " + board;
+  return name && name.endsWith(suffix) ? name.slice(0, name.length - suffix.length) : name;
+}
+
+function mailList(msgs, keyPrefix, showBoard) {
   const box = el("div");
   if (msgs === null) { box.appendChild(el("div", "bad", "우편함을 못 읽었다 — 비어 있는 게 아니라 모름")); return box; }
   if (!msgs.length) { box.appendChild(el("div", "dim", "편지 없음")); return box; }
   for (const m of msgs) {
     const row = el("div", "msg");
-    const ft = el("div", "fromto");
-    const from = el("b", null, m.from_name); from.title = m.from_handle || "";
-    const to = el("b", null, m.to_name); to.title = m.to_handle || "";
-    ft.appendChild(from); ft.appendChild(document.createTextNode(" → ")); ft.appendChild(to);
-    ft.appendChild(el("span", "dim", "   " + ageOf(m.created_at)));
+    const info = msgType(m.type);
+    const top = el("div", "msg-top");
+    top.appendChild(el("span", "chip " + info.cls,
+      info.ko + (m.priority === "high" && m.type !== "escalation" ? "·급함" : "")));
+    if (showBoard) top.appendChild(el("span", "chip", m.board));
+    top.appendChild(el("span", "subject" + (m.type === "escalation" ? " warn" : ""), m.subject || "(제목 없음)"));
+    top.appendChild(el("span", "msg-age dim", ageOf(m.created_at)));
+    row.appendChild(top);
+    // 우편함에서 중요한 건 받는 사람이다 (kyle) — 받는이 먼저, 받는이만 밝게.
+    const sub = el("div", "msg-sub");
+    const to = el("span", "to", roleShort(m.to_name, m.board)); to.title = m.to_handle || "";
+    const from = el("span", null, roleShort(m.from_name, m.board)); from.title = m.from_handle || "";
+    sub.appendChild(to); sub.appendChild(document.createTextNode(" ← ")); sub.appendChild(from);
     const u = untouchedSec(m);
     if (u !== null)
-      ft.appendChild(el("span", u > MAIL_DEAD_SEC ? "bad" : u > MAIL_WARN_SEC ? "warn" : "dim",
-        " · 아무도 안 읽음" + (u > MAIL_WARN_SEC ? " " + Math.floor(u / 60) + "분째 ⚠" : "")));
-    row.appendChild(ft);
-    const head = el("div");
-    head.appendChild(el("span", "tag", m.board));
-    head.appendChild(el("span", "tag", m.type + (m.priority === "high" ? " · high" : "")));
-    head.appendChild(el("span", "subject", m.subject || "(제목 없음)"));
-    row.appendChild(head);
+      sub.appendChild(el("span", u > MAIL_DEAD_SEC ? "bad" : u > MAIL_WARN_SEC ? "warn" : "dim",
+        "  · 아무도 안 읽음" + (u > MAIL_WARN_SEC ? " " + Math.floor(u / 60) + "분째 ⚠" : "")));
+    row.appendChild(sub);
     if (m.body) row.appendChild(det(keyPrefix + "-" + m.id, "내용", el("pre", null, m.body)));
     box.appendChild(row);
   }
@@ -998,7 +1029,7 @@ function pageMail(main) {
   const shown = base === null ? null
     : (mailFilter === "untouched" ? base.filter((m) => !m.read) : base);
   const card = el("div", "card");
-  card.appendChild(mailList(shown, "all"));
+  card.appendChild(mailList(shown, "all", true));
   main.appendChild(card);
 }
 
