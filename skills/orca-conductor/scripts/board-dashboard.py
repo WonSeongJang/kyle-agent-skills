@@ -70,6 +70,18 @@ def relay_tail(path: Path) -> list[str]:
     return lines[-RELAY_TAIL_LINES:]
 
 
+TASK_TEXT_MAX = 6000  # 카드 사양·결과 전문 표시 상한 (전체 payload 폭주 방지)
+
+
+def long_text(value) -> str | None:
+    if value is None:
+        return None
+    text = str(value)
+    if len(text) > TASK_TEXT_MAX:
+        return text[:TASK_TEXT_MAX] + f"\n… (총 {len(text)}자 — 전문은 orca orchestration dispatch-show)"
+    return text
+
+
 def last_preview_line(preview: str) -> str:
     for line in reversed((preview or "").splitlines()):
         if line.strip():
@@ -226,6 +238,8 @@ def collect(orca: str) -> dict:
                         "assignee_handle": assignee,
                         "created_at": task.get("created_at"),
                         "completed_at": task.get("completed_at"),
+                        "spec": long_text(task.get("spec")),
+                        "result": long_text(task.get("result")),
                     }
                 )
             board["cards"] = buckets
@@ -811,7 +825,13 @@ function taskTable(tasks) {
     const dot = el("span", "dot"); dot.style.background = info.color;
     td1.appendChild(dot); td1.appendChild(document.createTextNode(info.ko));
     tr.appendChild(td1);
-    tr.appendChild(el("td", "grow", t.title));
+    const tdTitle = el("td", "grow", t.title);
+    if (t.spec || t.result) {
+      let text = t.spec || "";
+      if (t.result) text += (text ? "\\n\\n── 결과 ──\\n" : "") + t.result;
+      tdTitle.appendChild(det("spec-" + t.id, "내용", el("pre", null, text)));
+    }
+    tr.appendChild(tdTitle);
     const who = el("td", "dim", t.status === "completed" ? "" : t.assignee || "");
     tr.appendChild(who);
     tr.appendChild(el("td", "dim", ageOf(t.completed_at || t.created_at)));
