@@ -45,6 +45,9 @@ bs = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(bs)
 
 COLLECT_MIN_INTERVAL = 8.0  # 초. 새로고침 연타가 orca 서브프로세스 폭주로 이어지지 않게.
+
+# 마지막 수집이 만든 명패 해석기 — 옛 편지 조회(/api/mail)가 재사용한다.
+LAST_MAPS: dict = {"resolve": None, "runs": {}}
 RELAY_TAIL_LINES = 60
 INBOX_LIMIT = 80
 BOARD_PREFIX = re.compile(r"^\[판:[^\]]*\]\s*")
@@ -337,6 +340,9 @@ def collect(orca: str) -> dict:
             return f"터미널(사라짐) · {handle[5:13]}"
         return handle[:24]
 
+    LAST_MAPS["resolve"] = resolve_handle
+    LAST_MAPS["runs"] = run_names
+
     if inbox is not None:
         msgs = inbox.get("result", {}).get("messages") or []
         out["messages"] = [
@@ -470,6 +476,49 @@ def ledger_rows(name: str, limit: int, offset: int) -> dict:
         return {"error": f"원장을 못 읽었다: {exc}"}
 
 
+def mail_history(limit: int) -> dict:
+    """원장 DB에서 옛 편지까지 읽는다 — CLI inbox 는 최근 80통 상한이라 옛날 것을 못 본다.
+
+    이름 풀이는 마지막 상태 수집(collect)이 만든 해석기를 재사용한다. 읽기 전용."""
+    if not LEDGER_DB.exists():
+        return {"error": f"원장 파일이 없다: {LEDGER_DB}"}
+    resolve = LAST_MAPS.get("resolve")
+    run_names = LAST_MAPS.get("runs") or {}
+    limit = max(1, min(limit, 2000))
+    try:
+        with ledger_conn() as conn:
+            rows = conn.execute(
+                "SELECT id, run_id, from_handle, to_handle, subject, body, type,"
+                " priority, read, created_at FROM messages ORDER BY rowid DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+    except sqlite3.Error as exc:
+        return {"error": f"원장을 못 읽었다: {exc}"}
+    messages = []
+    for row in rows:
+        created = row["created_at"] or ""
+        if created and "T" not in created:
+            created = created.replace(" ", "T") + "Z"  # DB는 UTC를 공백 형식으로 저장한다
+        messages.append(
+            {
+                "id": row["id"],
+                "board": run_names.get(row["run_id"], row["run_id"] or "?"),
+                "run_id": row["run_id"],
+                "type": row["type"],
+                "priority": row["priority"],
+                "subject": row["subject"],
+                "body": long_text(row["body"]),
+                "read": bool(row["read"]),
+                "created_at": created,
+                "from_name": resolve(row["from_handle"]) if resolve else (row["from_handle"] or "?"),
+                "to_name": resolve(row["to_handle"]) if resolve else (row["to_handle"] or "?"),
+                "from_handle": row["from_handle"],
+                "to_handle": row["to_handle"],
+            }
+        )
+    return {"messages": messages, "limit": limit}
+
+
 class Cache:
     def __init__(self, orca: str):
         self.orca = orca
@@ -571,6 +620,9 @@ PAGE = """<!doctype html>
   .chip.t-alert { color: #e8837a; border-color: #5a2f2b; }
   .chip.t-gate  { color: #e0b13e; border-color: #584a1e; }
   .chip.t-ask   { color: #6aabee; border-color: #2b4258; }
+  input.search { background: var(--card); border: 1px solid var(--line); border-radius: 6px;
+                 color: var(--text); padding: 2px 10px; font: inherit; font-size: 13px;
+                 width: 240px; margin-left: 8px; }
   .scroll { max-height: 60vh; overflow: auto; }
   @media (max-width: 760px) {
     #layout { display: block; }
@@ -587,6 +639,8 @@ PAGE = """<!doctype html>
 let DATA = null;
 let mailFilter = "all";       // 우편함 필터: all | untouched
 let hideRelayMail = true;     // 중계기 일상 편지 숨김 (kyle: 평소엔 우편이 아니라 로그 확인용)
+let mailLimit = 80;           // 80 = 실시간 수집분(CLI 상한). 그 이상은 원장 DB에서 읽는다.
+let mailQuery = "";           // 우편함 검색어 (제목·보낸이·받는이·판·본문)
 const openKeys = new Set();   // 새로고침해도 펼친 항목을 유지한다
 
 const $ = (id) => document.getElementById(id);
@@ -1008,16 +1062,27 @@ function mailList(msgs, keyPrefix, showBoard) {
   return box;
 }
 
-function pageMail(main) {
+async function pageMail(main) {
   main.appendChild(el("h2", null, "우편함"));
   main.appendChild(el("div", "sub",
     "줄마다: [편지 종류 칩] [판 · 어느 판 칩] 제목 … 시각 / 보낸사람 → 받는사람(밝은 글씨)."
     + " '아무도 안 읽음' = 감독·중계기·companion·슈퍼 넷 중 누구도 아직 안 집은 편지."
     + " 읽음 처리 없이 보기만 한다 (감독 편지를 안 가로챔)."));
+  let source = DATA.messages;
+  if (mailLimit > 80) {
+    // 실시간 수집분(80통) 너머는 원장 DB에서 읽는다 — 3,700통 전체까지 거슬러 갈 수 있다.
+    try {
+      const d = await (await fetch("/api/mail?limit=" + mailLimit)).json();
+      source = d.error ? null : (d.messages || null);
+    } catch (e) { source = null; }
+  }
+  const q = mailQuery.trim();
+  const searched = source === null ? null : (q ? source.filter((m) =>
+    [m.subject, m.from_name, m.to_name, m.board, m.body].some((v) => (v || "").includes(q))) : source);
   const bar = el("div", "row");
-  const logCnt = DATA.messages === null ? 0 : DATA.messages.filter(isLogMail).length;
-  const base = DATA.messages === null ? null
-    : (hideRelayMail ? DATA.messages.filter((m) => !isLogMail(m)) : DATA.messages);
+  const logCnt = searched === null ? 0 : searched.filter(isLogMail).length;
+  const base = searched === null ? null
+    : (hideRelayMail ? searched.filter((m) => !isLogMail(m)) : searched);
   const total = base === null ? "?" : base.length;
   const untouchedCnt = base === null ? "?" : base.filter((m) => !m.read).length;
   const mkBtn = (active, label, onclick) => {
@@ -1033,7 +1098,20 @@ function pageMail(main) {
     () => { hideRelayMail = !hideRelayMail; render(); });
   logBtn.title = "로그 편지 = 중계기 일상 통신(순찰·감시 갱신) + 작업자 생존신호(heartbeat). 경보·관문은 절대 안 숨김.";
   bar.appendChild(logBtn);
+  bar.appendChild(mkBtn(mailLimit > 80,
+    mailLimit > 80 ? "원장에서 " + mailLimit + "통 · 더 옛날까지" : "옛날 편지 더 보기",
+    () => { mailLimit = Math.min(mailLimit === 80 ? 400 : mailLimit * 2, 2000); render(); }));
+  if (mailLimit > 80)
+    bar.appendChild(mkBtn(false, "최근 80통으로", () => { mailLimit = 80; render(); }));
+  const search = el("input", "search");
+  search.type = "search";
+  search.placeholder = "검색 후 Enter (예: 슈퍼감독)";
+  search.value = mailQuery;
+  search.onchange = () => { mailQuery = search.value; render(); };
+  bar.appendChild(search);
   main.appendChild(bar);
+  if (q && base !== null)
+    main.appendChild(el("div", "row dim", "검색 '" + q + "' — " + base.length + "통"));
   const shown = base === null ? null
     : (mailFilter === "untouched" ? base.filter((m) => !m.read) : base);
   const card = el("div", "card");
@@ -1163,6 +1241,8 @@ async function refresh() {
     main.replaceChildren(el("div", "bad", "서버 응답 없음 — board-dashboard.py 가 꺼졌는지 확인"));
     return;
   }
+  // 검색창에 입력 중이면 화면을 갈아엎지 않는다 — 타이핑이 날아간다 (2026-08-10 실측).
+  if (document.activeElement && document.activeElement.tagName === "INPUT") return;
   render();
 }
 
@@ -1193,6 +1273,15 @@ def make_handler(cache: Cache):
                 self._send(200, "text/html; charset=utf-8", PAGE.encode())
             elif self.path.startswith("/api/status"):
                 body = json.dumps(cache.get(), ensure_ascii=False).encode()
+                self._send(200, "application/json; charset=utf-8", body)
+            elif self.path.startswith("/api/mail"):
+                cache.get()  # 명패 해석기를 최신으로 만들어 둔다
+                query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                try:
+                    limit = int((query.get("limit") or ["400"])[0])
+                except ValueError:
+                    limit = 400
+                body = json.dumps(mail_history(limit), ensure_ascii=False).encode()
                 self._send(200, "application/json; charset=utf-8", body)
             elif self.path.startswith("/api/ledger/tables"):
                 body = json.dumps(ledger_tables(), ensure_ascii=False).encode()
