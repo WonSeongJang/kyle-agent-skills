@@ -124,6 +124,26 @@ def board_name(objective: str) -> str:
     return head[:34] if head else "(이름 없음)"
 
 
+def seat_warning(task: dict, terminals: dict | None) -> tuple[str, str]:
+    """장부-실물 대조: 도는 카드가 가리키는 자리가 실제로 있는가.
+
+    (색, 문구) 를 돌려주며 문제가 없으면 문구가 빈 문자열이다.
+    살아 있는 것과 장부가 맞는 것은 다른 확인이다 — 2026-08-10 실사고에서
+    중계기가 멀쩡히 일기를 쓰는 동안 카드는 죽은 자리를 가리키고 있었다.
+
+    한계: 옛 자리가 아직 살아 있는데 역할만 옮겨간 경우는 못 잡는다.
+    그건 roster resolve 를 판마다 더 불러야 해서, 실제로 관측되면 그때 넣는다.
+    """
+    if terminals is None:
+        return DIM, "  (자리 확인 불가 — 터미널 목록을 못 읽음)"
+    seat = task.get("assignee_handle")
+    if not seat:
+        return YELLOW, "  ⚠ 담당 자리가 카드에 없음"
+    if seat not in terminals:
+        return RED, f"  ⚠ 장부 어긋남 — 카드가 가리키는 {seat[:18]}… 자리가 없다"
+    return "", ""
+
+
 def collect_terminals(orca: str) -> tuple[dict[str, dict] | None, str | None]:
     data = run_json(orca, ["terminal", "list"])
     if data is None:
@@ -264,10 +284,19 @@ def main() -> int:
                 bits.append(paint(YELLOW, f"실패 {failed}"))
             bits.append(paint(DIM, f"완료 {done}"))
             print("   카드   " + "   ".join(bits))
+
+            # 장부-실물 대조: 도는 카드가 가리키는 자리가 실제로 있는가.
+            # 살아 있는 것과 장부가 맞는 것은 다른 확인이다 — 2026-08-10 실사고에서
+            # 중계기가 멀쩡히 일기를 쓰는 동안 카드는 죽은 자리를 가리키고 있었다.
+            # 한계: 옛 자리가 아직 살아 있는데 역할만 옮겨간 경우는 이 검사로 못 잡는다.
+            # 그건 roster resolve 를 판마다 더 불러야 해서, 실제로 관측되면 그때 넣는다.
             for task in tasks:
-                if task.get("status") == "dispatched":
-                    label = (task.get("display_name") or task.get("title") or "")[:56]
-                    print(f"          {paint(CYAN, '▸')} {label}")
+                if task.get("status") != "dispatched":
+                    continue
+                label = (task.get("display_name") or task.get("title") or "")[:56]
+                code, note = seat_warning(task, terminals)
+                mark = paint(code, note) if note else ""
+                print(f"          {paint(CYAN, '▸')} {label}{mark}")
 
         entry = relay_logs.get(name)
         if entry is None:
