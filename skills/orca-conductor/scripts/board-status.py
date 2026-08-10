@@ -132,34 +132,37 @@ ORCHESTRATION_DB = (
 LOUD_TYPES = ("escalation", "decision_gate", "question", "ask", "worker_done")
 
 
-def unread_mail(run_id: str) -> tuple[int, int, list[tuple[str, str]]] | None:
-    """(전체 안 읽음, 그중 시끄러운 것, 최근 제목 몇 개). 못 읽으면 None.
+def recent_mail(run_id: str) -> list[tuple[str, str, str]] | None:
+    """이 판 우편함의 최근 편지 몇 통. (종류, 제목, 시각). 못 읽으면 None.
 
     Why: 2026-08-10 실사고 — 사전검증이 NOT_READY 를 보냈는데 40분간 아무도 안 읽었고,
     대시보드는 '대기 1' 만 보여줘서 막힌 것과 할 일이 남은 것을 구분할 수 없었다.
     카드와 섞지 않고 우편함으로 따로 세운다 (kyle 지시).
 
+    **'안 읽음 N통' 은 세지 않는다 (2026-08-10 kyle 지적).** `messages.read` 는 편지당
+    불리언 하나여서 소비자별이 아니다. 이 판의 소비자는 감독·중계기·companion·슈퍼 넷인데,
+    누구든 먼저 건드리면 꺼지므로 "감독이 안 읽었다" 를 표현할 수 없다. 그 숫자를 보여주면
+    틀린 뜻을 정확한 숫자처럼 보이게 한다.
+
+    소비자별 도달 판정은 판 mailbox-relay-1 의 B2(소비자별 커서로 통일)가 자리잡은 뒤
+    그 계약을 읽어서 붙인다. 지금 DB 에는 커서 테이블이 아직 없다(실측).
+    그때까지는 **사실인 것만** 보여준다 — 최근에 어떤 편지가 오갔는가.
+
     'alive' 하트비트는 생존 신호라 사람이 읽을 것이 아니므로 제외한다.
     """
     if not Path(ORCHESTRATION_DB).exists():
         return None
-    base = (
-        "from messages where read=0 and run_id=? "
-        "and type<>'heartbeat' and subject<>'alive'"
-    )
     try:
         with sqlite3.connect(f"file:{ORCHESTRATION_DB}?mode=ro", uri=True, timeout=5) as db:
-            total = db.execute(f"select count(*) {base}", (run_id,)).fetchone()[0]
-            marks = ",".join("?" * len(LOUD_TYPES))
-            loud = db.execute(
-                f"select count(*) {base} and type in ({marks})", (run_id, *LOUD_TYPES)
-            ).fetchone()[0]
-            recent = db.execute(
-                f"select type, subject {base} order by sequence desc limit 2", (run_id,)
+            rows = db.execute(
+                "select type, subject, created_at from messages where run_id=? "
+                "and type<>'heartbeat' and subject<>'alive' "
+                "order by sequence desc limit 3",
+                (run_id,),
             ).fetchall()
     except sqlite3.Error:
         return None
-    return total, loud, [(row[0] or "", row[1] or "") for row in recent]
+    return [(row[0] or "", row[1] or "", row[2] or "") for row in rows]
 
 
 def seat_warning(task: dict, terminals: dict | None) -> tuple[str, str]:
@@ -336,24 +339,19 @@ def main() -> int:
                 mark = paint(code, note) if note else ""
                 print(f"          {paint(CYAN, '▸')} {label}{mark}")
 
-        mail = unread_mail(run.get("id", ""))
+        mail = recent_mail(run.get("id", ""))
         if mail is None:
-            print(f"   우편함 {paint(DIM, '못 읽음 — 0통이 아니라 모름')}")
+            print(f"   우편함 {paint(DIM, '못 읽음 — 비어 있는 게 아니라 모름')}")
+        elif not mail:
+            print(f"   우편함 {paint(DIM, '오간 편지 없음')}")
         else:
-            total, loud, recent = mail
-            if total == 0:
-                print(f"   우편함 {paint(GREEN, '안 읽은 편지 없음')}")
-            else:
-                # 총 통수만 크게 보이면 겁만 주고 판단이 안 된다.
-                # 실제로 사람을 부르는 종류(정체·결정·질문·완료)를 따로 센다.
-                if loud:
-                    head = f"안 읽음 {total}통 · 그중 봐야 할 것 {loud}  ⚠"
-                    print(f"   우편함 {paint(RED, head)}")
-                else:
-                    print(f"   우편함 {paint(YELLOW, f'안 읽음 {total}통 (전부 진행 보고류)')}")
-                for kind, subject in recent:
-                    tag = f"[{kind}] " if kind and kind != "status" else ""
-                    print(f"          {paint(CYAN, '▸')} {tag}{subject[:64]}")
+            print(f"   우편함 {paint(DIM, '최근 편지')}")
+            for kind, subject, when in mail:
+                stamp = when[11:16] if len(when) >= 16 else ""
+                code = RED if kind in LOUD_TYPES else ""
+                tag = f"[{kind}] " if kind and kind != "status" else ""
+                line = f"{tag}{subject[:58]}"
+                print(f"          {paint(CYAN, '▸')} {paint(DIM, stamp)} {paint(code, line) if code else line}")
 
         entry = relay_logs.get(name)
         if entry is None:
