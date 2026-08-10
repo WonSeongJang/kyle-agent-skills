@@ -520,6 +520,7 @@ PAGE = """<!doctype html>
 </div>
 <script>
 let DATA = null;
+let mailFilter = "all";       // 우편함 필터: all | untouched
 const openKeys = new Set();   // 새로고침해도 펼친 항목을 유지한다
 
 const $ = (id) => document.getElementById(id);
@@ -539,6 +540,18 @@ function ageOf(iso) {
   if (sec < 86400) return Math.floor(sec / 3600) + "시간 " + Math.floor((sec % 3600) / 60) + "분 전";
   return Math.floor(sec / 86400) + "일 전";
 }
+function ageSecOf(iso) {
+  if (!iso) return null;
+  const t = Date.parse(iso.includes("T") ? iso : iso.replace(" ", "T") + "Z");
+  return isNaN(t) ? null : Math.max(0, (Date.now() - t) / 1000);
+}
+// read=0 의 정직한 뜻은 "아무도(감독·중계기·companion·슈퍼) 안 읽음"이다. 소비자별 구분은
+// 못 하지만(1d527a5), 오래 아무도 안 집은 편지는 배달 사슬 고장의 신호다 — NOT_READY 편지가
+// 40분 방치된 실사고 (2026-08-10, kyle 결정으로 이 뜻으로 되살림). 문턱은 새 숫자를 만들지
+// 않고 중계기 일기와 같은 600/1200초를 재사용한다.
+const MAIL_WARN_SEC = 600, MAIL_DEAD_SEC = 1200;
+function untouchedSec(m) { return m.read ? null : ageSecOf(m.created_at); }
+
 function det(key, summaryText, contentNode) {
   const d = el("details");
   d.dataset.key = key;
@@ -568,9 +581,9 @@ function route() {
 
 function boardWarns(b) {
   const w = [];
-  // "안 읽은 편지" 경고는 1d527a5 정정으로 뺐다 — messages.read 는 편지당 불리언 하나라
-  // 소비자(감독·중계기·companion·슈퍼)별이 아니어서 "감독이 안 읽음"을 표현할 수 없다.
-  // 판별 편지 줄은 최근 편지 사실만 보여주고, 소비자별 도달은 B2 커서 계약 뒤에 붙인다.
+  if (DATA.messages !== null &&
+      DATA.messages.some((m) => m.run_id === b.run_id && (untouchedSec(m) || 0) > MAIL_DEAD_SEC))
+    w.push("묵은 편지");
   if (b.gates && b.gates.some((g) => (g.status || "pending") === "pending")) w.push("관문");
   if (b.relay && b.relay.age_sec !== undefined && b.relay.age_sec > b.relay.dead_sec) w.push("중계기");
   if (!b.companions.length) w.push("깨우미");
@@ -634,6 +647,9 @@ function pageOverview(main) {
   tiles.appendChild(tile("도는 카드", running, failed ? "실패 " + failed : ""));
   tiles.appendChild(tile("대기 관문", gates));
   tiles.appendChild(tile("마지막 편지", lastMail));
+  const stale = DATA.messages === null ? null
+    : DATA.messages.filter((m) => (untouchedSec(m) || 0) > MAIL_WARN_SEC).length;
+  tiles.appendChild(tile("묵은 편지", stale, "10분+ 아무도 안 읽음"));
   tiles.appendChild(tile("부하", s.load, "CPU " + s.cpus));
   tiles.appendChild(tile("메모리 여유", s.mem_free));
   tiles.appendChild(tile("디스크 여유", s.disk_avail, s.disk_used_pct ? "사용 " + s.disk_used_pct : ""));
@@ -694,8 +710,10 @@ function boardSummaryCard(b) {
   card.appendChild(mail);
   for (const m of mine.slice(0, 3)) {
     const urgent = m.type === "escalation" || m.type === "decision_gate";
-    card.appendChild(el("div", "row " + (urgent ? "warn" : "dim"),
-      "   ▸ " + ageOf(m.created_at) + " · " + m.type + " · " + (m.subject || "(제목 없음)")));
+    const stale = (untouchedSec(m) || 0) > MAIL_WARN_SEC;
+    card.appendChild(el("div", "row " + (stale || urgent ? "warn" : "dim"),
+      "   ▸ " + ageOf(m.created_at) + " · " + m.type + " · " + (m.subject || "(제목 없음)")
+      + (stale ? " · 아무도 안 읽음 ⚠" : "")));
   }
 
   const gates = (b.gates || []).filter((g) => (g.status || "pending") === "pending");
@@ -870,6 +888,10 @@ function mailList(msgs, keyPrefix) {
     const to = el("b", null, m.to_name); to.title = m.to_handle || "";
     ft.appendChild(from); ft.appendChild(document.createTextNode(" → ")); ft.appendChild(to);
     ft.appendChild(el("span", "dim", "   " + ageOf(m.created_at)));
+    const u = untouchedSec(m);
+    if (u !== null)
+      ft.appendChild(el("span", u > MAIL_DEAD_SEC ? "bad" : u > MAIL_WARN_SEC ? "warn" : "dim",
+        " · 아무도 안 읽음" + (u > MAIL_WARN_SEC ? " " + Math.floor(u / 60) + "분째 ⚠" : "")));
     row.appendChild(ft);
     const head = el("div");
     head.appendChild(el("span", "tag", m.board));
@@ -884,11 +906,25 @@ function mailList(msgs, keyPrefix) {
 
 function pageMail(main) {
   main.appendChild(el("h2", null, "우편함"));
-  main.appendChild(el("div", "sub", "최근 " + (DATA.messages ? DATA.messages.length : "?")
-    + "통 · 읽음 표시는 소비자별이 아니어서 보여주지 않는다 (1d527a5 정정 · B2 커서 계약 후 소비자별 도달로 대체)"
+  main.appendChild(el("div", "sub",
+    "'아무도 안 읽음' = 감독·중계기·companion·슈퍼 넷 중 누구도 아직 안 집은 편지 (누가 안 읽었는지 구분은 B2 커서 계약 후)"
     + " · 읽음 처리 없이 보기만 한다 (감독 편지를 안 가로챔)."));
+  const bar = el("div", "row");
+  const total = DATA.messages === null ? "?" : DATA.messages.length;
+  const untouchedCnt = DATA.messages === null ? "?" : DATA.messages.filter((m) => !m.read).length;
+  const mkBtn = (key, label) => {
+    const a = el("a", "tag" + (mailFilter === key ? " who" : ""), label);
+    a.href = "javascript:void(0)";
+    a.onclick = () => { mailFilter = key; render(); };
+    return a;
+  };
+  bar.appendChild(mkBtn("all", "전체 " + total));
+  bar.appendChild(mkBtn("untouched", "아무도 안 읽음 " + untouchedCnt));
+  main.appendChild(bar);
+  const shown = DATA.messages === null ? null
+    : (mailFilter === "untouched" ? DATA.messages.filter((m) => !m.read) : DATA.messages);
   const card = el("div", "card");
-  card.appendChild(mailList(DATA.messages, "all"));
+  card.appendChild(mailList(shown, "all"));
   main.appendChild(card);
 }
 
