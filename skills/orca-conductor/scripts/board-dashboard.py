@@ -168,7 +168,11 @@ def collect(orca: str) -> dict:
         term = terminals.get(handle) if (terminals and handle) else None
         name = bs.board_name(run.get("objective", ""))
         if term is None:
-            out["dormant"].append({"name": name, "run_id": run.get("id", "")})
+            # run-list 에는 열림/닫힘 상태 필드가 없다 (2026-08-10 실측). 감독 터미널이
+            # 사라진 run 은 "잠든 판"이 아니라 끝난 판·일회용 시험이 섞인 지난 기록이다.
+            out["dormant"].append(
+                {"name": name, "run_id": run.get("id", ""), "created_at": run.get("created_at")}
+            )
             continue
 
         preview = term.get("preview", "")
@@ -585,7 +589,7 @@ function renderSide() {
          warns.length ? "hot" : "live");
   }
   side.appendChild(el("div", "navsec", ""));
-  item("dormant", "잠든 판", DATA.dormant.length);
+  item("dormant", "지난 기록", DATA.dormant.length);
 }
 
 function tile(k, v, small) {
@@ -606,7 +610,7 @@ function pageOverview(main) {
   const failed = DATA.boards.reduce((n, b) => n + ((b.cards && b.cards.failed) || 0), 0);
   const gates = DATA.boards.reduce((n, b) => n + ((b.gates || []).filter((g) => (g.status || "pending") === "pending").length), 0);
   const unread = DATA.messages === null ? null : DATA.messages.filter((m) => !m.read).length;
-  tiles.appendChild(tile("살아있는 판", DATA.boards.length, "/ 잠든 " + DATA.dormant.length));
+  tiles.appendChild(tile("살아있는 판", DATA.boards.length, "/ 지난 기록 " + DATA.dormant.length));
   tiles.appendChild(tile("도는 카드", running, failed ? "실패 " + failed : ""));
   tiles.appendChild(tile("대기 관문", gates));
   tiles.appendChild(tile("안 읽은 편지", unread));
@@ -691,7 +695,7 @@ function pageBoard(main, runId) {
   if (!b) {
     const d = DATA.dormant.find((x) => x.run_id === runId);
     main.appendChild(el("h2", null, d ? d.name : "판 없음"));
-    main.appendChild(el("div", "sub", d ? "감독 터미널이 없는 잠든 판이다." : runId));
+    main.appendChild(el("div", "sub", d ? "감독 터미널이 사라진 지난 기록이다." : runId));
     return;
   }
   main.appendChild(el("h2", null, b.name));
@@ -916,14 +920,19 @@ async function pageLedger(main, tableName) {
 }
 
 function pageDormant(main) {
-  main.appendChild(el("h2", null, "잠든 판"));
-  main.appendChild(el("div", "sub", "감독 터미널이 없는 실행 기록(run) " + DATA.dormant.length + "개."));
+  main.appendChild(el("h2", null, "지난 기록"));
+  main.appendChild(el("div", "sub", "감독 터미널이 사라진 실행 기록(run) " + DATA.dormant.length
+    + "개 — 끝난 판, 일회용 시험, 레거시가 섞여 있다. 장부에 판을 닫는 표시가 없어 기록이 계속 남는다."));
   const card = el("div", "card");
   const table = el("table");
+  const head = el("tr");
+  for (const t of ["이름", "실행 기록(run)", "만든 때"]) head.appendChild(el("th", null, t));
+  table.appendChild(head);
   for (const d of DATA.dormant) {
     const tr = el("tr");
     tr.appendChild(el("td", "grow", d.name));
     tr.appendChild(el("td", "dim mono", d.run_id));
+    tr.appendChild(el("td", "dim", ageOf(d.created_at)));
     table.appendChild(tr);
   }
   card.appendChild(table);
