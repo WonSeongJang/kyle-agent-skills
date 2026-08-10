@@ -5,7 +5,10 @@ Why: 사람이 "판이 뭘 하고 있나"를 알려고 감독을 깨우면 감�
 (2026-08-10 실사고). 이 스크립트는 감독을 건드리지 않고 읽기만 한다.
 
 보는 순간 수집하므로 값이 낡을 수 없다. 곁눈질하려면:
-    watch -n 15 board-status.py
+    board-status.py --watch        (기본 15초, --watch 30 처럼 초를 줄 수 있다)
+
+macOS 에는 watch(1) 이 없어서 --watch 를 스크립트 안에 넣었다. brew 설치를 요구하지
+않는다 — 감시 도구가 설치 하나를 더 요구하면 안 쓰게 된다.
 """
 
 from __future__ import annotations
@@ -268,5 +271,31 @@ def main() -> int:
     return 0
 
 
+def watch_seconds() -> float | None:
+    """--watch [초]. 초를 안 주면 15초."""
+    if "--watch" not in sys.argv:
+        return None
+    idx = sys.argv.index("--watch")
+    if idx + 1 < len(sys.argv):
+        try:
+            return max(3.0, float(sys.argv[idx + 1]))
+        except ValueError:
+            pass
+    return 15.0
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    every = watch_seconds()
+    if every is None:
+        sys.exit(main())
+    try:
+        while True:
+            # 화면을 지우되 스크롤백은 남긴다 — 직전 화면을 위로 올려 볼 수 있게.
+            sys.stdout.write("\033[H\033[2J")
+            sys.stdout.flush()
+            main()
+            print(f"\n{DIM}{every:.0f}초마다 갱신 · Ctrl+C 로 종료{RESET}")
+            time.sleep(every)
+    except KeyboardInterrupt:
+        print()
+        sys.exit(0)
