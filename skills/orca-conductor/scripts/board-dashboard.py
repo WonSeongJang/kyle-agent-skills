@@ -407,6 +407,43 @@ LEDGER_DB = next((p for p in LEDGER_CANDIDATES if p.exists()), LEDGER_CANDIDATES
 LEDGER_ROW_LIMIT = 200
 LEDGER_CELL_MAX = 400
 
+# kyle 메모함 — 대시보드의 유일한 쓰기 경로. 판 카드를 직접 만들지 않는 이유:
+# 카드는 감독이 단일 작성자다. 여기 쌓인 메모는 슈퍼감독이 읽고 알맞은 저장소
+# TODO 나 판 지시로 분배한다 (2026-08-11 kyle 요청).
+MEMO_FILE = Path.home() / "Dev/kyle-agent-skills/docs/kyle-inbox.md"
+MEMO_MAX_LEN = 2000
+MEMO_HEADER = (
+    "# kyle 메모함 (대시보드 수기)\n\n"
+    "대시보드 메모함 탭에서 쌓인다. 슈퍼감독이 주기적으로 읽고 저장소 TODO/판 지시로 분배한다.\n"
+    "분배가 끝난 줄은 지우지 말고 `- [분배됨 → 어디]` 를 뒤에 붙인다.\n\n"
+)
+_memo_lock = threading.Lock()
+
+
+def memo_list() -> dict:
+    if not MEMO_FILE.exists():
+        return {"file": str(MEMO_FILE), "items": []}
+    items = [
+        line[2:]
+        for line in MEMO_FILE.read_text(encoding="utf-8").splitlines()
+        if line.startswith("- ")
+    ]
+    return {"file": str(MEMO_FILE), "items": items}
+
+
+def memo_add(text: str) -> dict:
+    text = " ".join(text.split())  # 한 메모 = 한 줄
+    if not text:
+        return {"error": "빈 메모"}
+    if len(text) > MEMO_MAX_LEN:
+        return {"error": f"메모가 너무 길다 ({len(text)}자 > {MEMO_MAX_LEN})"}
+    stamp = time.strftime("%Y-%m-%d %H:%M")
+    with _memo_lock:
+        header = "" if MEMO_FILE.exists() else MEMO_HEADER
+        with MEMO_FILE.open("a", encoding="utf-8") as f:
+            f.write(f"{header}- {stamp} | {text}\n")
+    return memo_list()
+
 
 def ledger_conn() -> sqlite3.Connection:
     uri = f"file:{urllib.parse.quote(str(LEDGER_DB))}?mode=ro"
@@ -747,6 +784,7 @@ function renderSide() {
   item("mail", "우편함", DATA.messages === null ? "?" : DATA.messages.length);
   item("terms", "터미널", DATA.terminals.length);
   item("ledger", "원장 (DB)");
+  item("memo", "메모함", MEMOS ? MEMOS.items.length : undefined);
   side.appendChild(el("div", "navsec", "살아있는 판"));
   for (const b of DATA.boards) {
     const warns = boardWarns(b);
@@ -1216,6 +1254,59 @@ function pageDormant(main) {
   main.appendChild(card);
 }
 
+// 메모함 — 대시보드의 유일한 쓰기 경로. 판 카드를 직접 만들지 않는다(카드는 감독이
+// 단일 작성자). 쌓인 메모는 슈퍼감독이 읽고 저장소 TODO/판 지시로 분배한다.
+let MEMOS = null;
+async function loadMemos() {
+  try { MEMOS = await (await fetch("/api/memo")).json(); } catch (e) { MEMOS = { items: [], error: String(e) }; }
+}
+async function pageMemo(main) {
+  if (MEMOS === null) { await loadMemos(); renderSide(); }
+  const form = el("div", "card");
+  form.appendChild(el("h2", null, "메모함"));
+  form.appendChild(el("div", "dim row",
+    "생각날 때 적어두면 슈퍼감독이 읽고 저장소 TODO나 판 지시로 분배한다. 원본: " + (MEMOS.file || "")));
+  const bar = el("div", "row");
+  const input = el("input", "search");
+  input.placeholder = "메모 입력 후 Enter (예: 우편함에 발신시각 추가)";
+  input.style.flex = "1";
+  const submit = async () => {
+    const text = input.value.trim();
+    if (!text) return;
+    input.disabled = true;
+    try {
+      const res = await fetch("/api/memo", { method: "POST",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
+      const d = await res.json();
+      if (d.error) { alert(d.error); } else { MEMOS = d; input.value = ""; }
+    } catch (e) { alert("저장 실패: " + e); }
+    input.disabled = false;
+    render();
+    setTimeout(() => { const i = document.querySelector("input.search"); if (i) i.focus(); }, 0);
+  };
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") submit(); });
+  bar.appendChild(input);
+  const btn = el("a", "tag who", "추가");
+  btn.href = "javascript:void(0)";
+  btn.onclick = submit;
+  bar.appendChild(btn);
+  form.appendChild(bar);
+  main.appendChild(form);
+  const card = el("div", "card");
+  if (MEMOS.error) card.appendChild(el("div", "bad row", "⚠ " + MEMOS.error));
+  if (!MEMOS.items.length) card.appendChild(el("div", "dim", "아직 메모가 없다."));
+  const table = el("table");
+  for (const line of [...MEMOS.items].reverse()) {
+    const m = line.match(/^(\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}) \\| (.*)$/);
+    const tr = el("tr");
+    tr.appendChild(el("td", "dim", m ? m[1] : ""));
+    tr.appendChild(el("td", "grow", m ? m[2] : line));
+    table.appendChild(tr);
+  }
+  card.appendChild(table);
+  main.appendChild(card);
+}
+
 function render() {
   renderSide();
   const main = $("main");
@@ -1229,6 +1320,7 @@ function render() {
   else if (r.page === "terms") pageTerms(main);
   else if (r.page === "ledger") pageLedger(main, r.id);
   else if (r.page === "dormant") pageDormant(main);
+  else if (r.page === "memo") pageMemo(main);
   else pageOverview(main);
   window.scrollTo(0, scrollY);
 }
@@ -1296,6 +1388,23 @@ def make_handler(cache: Cache):
                     limit, offset = LEDGER_ROW_LIMIT, 0
                 body = json.dumps(ledger_rows(name, limit, offset), ensure_ascii=False).encode()
                 self._send(200, "application/json; charset=utf-8", body)
+            elif self.path.startswith("/api/memo"):
+                body = json.dumps(memo_list(), ensure_ascii=False).encode()
+                self._send(200, "application/json; charset=utf-8", body)
+            else:
+                self._send(404, "text/plain; charset=utf-8", b"not found")
+
+        def do_POST(self):
+            if self.path.startswith("/api/memo"):
+                try:
+                    length = int(self.headers.get("Content-Length") or 0)
+                    payload = json.loads(self.rfile.read(length).decode("utf-8"))
+                    result = memo_add(str(payload.get("text", "")))
+                except (ValueError, UnicodeDecodeError) as e:
+                    result = {"error": f"요청을 못 읽었다: {e}"}
+                code = 400 if "error" in result else 200
+                self._send(code, "application/json; charset=utf-8",
+                           json.dumps(result, ensure_ascii=False).encode())
             else:
                 self._send(404, "text/plain; charset=utf-8", b"not found")
 
