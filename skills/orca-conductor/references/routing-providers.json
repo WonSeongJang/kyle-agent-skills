@@ -267,6 +267,139 @@
           "experimental": true,
           "experimentSharePercent": 20,
           "command": "codex -p orca --model gpt-5.6-sol -c model_reasoning_effort=\"max\""
+        },
+        {
+          "id": "gpt-5.6-luna",
+          "role": "developer",
+          "effort": "xhigh",
+          "quality": 84,
+          "taskClassPrior": {
+            "research": 7,
+            "docs_config": 7,
+            "qa": 6,
+            "targeted_implementation": 3,
+            "security": -5,
+            "concurrency": -5
+          },
+          "harness": "omo",
+          "command": "omo --model openai-codex/gpt-5.6-luna --thinking xhigh --no-recommended-models",
+          "note": "codex 가 막힐 때 쓰는 같은 모델의 다른 실행기. --no-recommended-models 는 필수(없으면 kimi-k3 로 갈아탐). 검증은 --mode json 의 message.provider/model. 상세: conductor/references/agent-runners.json"
+        },
+        {
+          "id": "gpt-5.6-luna",
+          "role": "developer",
+          "effort": "max",
+          "quality": 86,
+          "taskClassPrior": {
+            "research": 8,
+            "docs_config": 8,
+            "qa": 7,
+            "targeted_implementation": 4,
+            "security": -6,
+            "concurrency": -6
+          },
+          "experimental": true,
+          "experimentSharePercent": 10,
+          "reviewerFamilyAllowlist": [
+            "openai",
+            "anthropic"
+          ],
+          "harness": "omo",
+          "command": "omo --model openai-codex/gpt-5.6-luna --thinking max --no-recommended-models",
+          "note": "codex 가 막힐 때 쓰는 같은 모델의 다른 실행기. --no-recommended-models 는 필수(없으면 kimi-k3 로 갈아탐). 검증은 --mode json 의 message.provider/model. 상세: conductor/references/agent-runners.json"
+        },
+        {
+          "id": "gpt-5.6-terra",
+          "role": "developer",
+          "effort": "high",
+          "quality": 86,
+          "enabled": false,
+          "taskClassPrior": {
+            "security": 4,
+            "concurrency": 4,
+            "bugfix": 3
+          },
+          "harness": "omo",
+          "command": "omo --model openai-codex/gpt-5.6-terra --thinking high --no-recommended-models",
+          "note": "codex 가 막힐 때 쓰는 같은 모델의 다른 실행기. --no-recommended-models 는 필수(없으면 kimi-k3 로 갈아탐). 검증은 --mode json 의 message.provider/model. 상세: conductor/references/agent-runners.json"
+        },
+        {
+          "id": "gpt-5.6-luna",
+          "role": "reviewer",
+          "effort": "max",
+          "quality": 96,
+          "taskClassPrior": {
+            "research": 4,
+            "docs_config": 4,
+            "qa": 3,
+            "security": -6,
+            "concurrency": -6
+          },
+          "harness": "omo",
+          "command": "omo --model openai-codex/gpt-5.6-luna --thinking max --no-recommended-models",
+          "note": "codex 가 막힐 때 쓰는 같은 모델의 다른 실행기. --no-recommended-models 는 필수(없으면 kimi-k3 로 갈아탐). 검증은 --mode json 의 message.provider/model. 상세: conductor/references/agent-runners.json"
+        },
+        {
+          "id": "gpt-5.6-sol",
+          "role": "reviewer",
+          "effort": "medium",
+          "quality": 98,
+          "taskClassPrior": {
+            "security": 5,
+            "concurrency": 5,
+            "architecture": 3
+          },
+          "harness": "omo",
+          "command": "omo --model openai-codex/gpt-5.6-sol --thinking medium --no-recommended-models",
+          "note": "codex 가 막힐 때 쓰는 같은 모델의 다른 실행기. --no-recommended-models 는 필수(없으면 kimi-k3 로 갈아탐). 검증은 --mode json 의 message.provider/model. 상세: conductor/references/agent-runners.json"
+        },
+        {
+          "id": "gpt-5.6-sol",
+          "role": "reviewer",
+          "effort": "high",
+          "quality": 99,
+          "taskClassPrior": {
+            "security": 5,
+            "concurrency": 5,
+            "architecture": 3
+          },
+          "experimental": true,
+          "experimentSharePercent": 20,
+          "harness": "omo",
+          "command": "omo --model openai-codex/gpt-5.6-sol --thinking high --no-recommended-models",
+          "note": "codex 가 막힐 때 쓰는 같은 모델의 다른 실행기. --no-recommended-models 는 필수(없으면 kimi-k3 로 갈아탐). 검증은 --mode json 의 message.provider/model. 상세: conductor/references/agent-runners.json"
+        },
+        {
+          "id": "gpt-5.6-sol",
+          "role": "reviewer",
+          "effort": "xhigh",
+          "quality": 99.3,
+          "taskClassPrior": {
+            "security": 5,
+            "concurrency": 5,
+            "architecture": 3
+          },
+          "experimental": true,
+          "experimentSharePercent": 20,
+          "harness": "omo",
+          "command": "omo --model openai-codex/gpt-5.6-sol --thinking xhigh --no-recommended-models",
+          "note": "codex 가 막힐 때 쓰는 같은 모델의 다른 실행기. --no-recommended-models 는 필수(없으면 kimi-k3 로 갈아탐). 검증은 --mode json 의 message.provider/model. 상세: conductor/references/agent-runners.json"
+        },
+        {
+          "id": "gpt-5.6-sol",
+          "role": "reviewer",
+          "effort": "max",
+          "quality": 99.6,
+          "taskClassPrior": {
+            "security": 5,
+            "concurrency": 5,
+            "architecture": 3
+          },
+          "experimental": true,
+          "experimentSharePercent": 20,
+          "harness": "omo",
+          "command": "omo --model openai-codex/gpt-5.6-sol --thinking max --no-recommended-models",
+          "note": "codex 가 막힐 때 쓰는 같은 모델의 다른 실행기. --no-recommended-models 는 필수(없으면 kimi-k3 로 갈아탐). 검증은 --mode json 의 message.provider/model. 상세: conductor/references/agent-runners.json"
         }
       ]
     },
