@@ -67,6 +67,31 @@ if [ -z "$ORCA_BIN" ] || [ ! -x "$ORCA_BIN" ]; then
   exit 3
 fi
 
+# B8(2026-08-10): 감독 깨우기(supervisor-waker.sh)의 심박을 읽어 그것이 끊기면 신고한다.
+#
+# Why: 깨우기는 감독을 주기적으로 깨우는 유일한 장치다. 그것이 죽으면 감독은 편지가 올 때만
+# 깨어나고, 편지가 안 오면 영원히 안 깨어난다 — 2026-08-09 열한 시간 정지가 그 상태였다.
+# 그러면 깨우기는 누가 보는가. **새 프로세스를 만들지 않는다.** 깨우기가 매 주기 심박을 적고,
+# 이미 판을 보고 있는 이 신고기가 그 줄이 끊긴 것을 본다. 감시는 여기서 한 겹으로 끝난다.
+#
+# 심박 경로는 --relay-log 와 --board 에서 **유도**한다(waker-heartbeat-path.sh 한 곳에서 계산).
+# 인자로 받지 않는 이유: 안 주면 안 켜지는 방어는 방어가 아니기 때문이다. 끄는 방법이 없다.
+# shellcheck source=./waker-heartbeat-path.sh
+. "$(cd "$(dirname "$0")" && pwd)/waker-heartbeat-path.sh"
+WAKER_HEARTBEAT_LOG=$(waker_heartbeat_path "$RELAY_LOG" "$BOARD") || {
+  echo "HEARTBEAT_PATH_UNRESOLVED relay_log=$RELAY_LOG board=$BOARD" >&2
+  exit 3
+}
+# 심박이 끊겼다고 볼 시간. 깨우기가 자기 주기(interval=)를 심박 줄에 적어 주므로 그 3배로
+# 잡는다 — 임계값을 여기 상수로 또 적으면 주기를 바꿀 때 한쪽만 바뀌어 오보가 난다.
+# 심박 파일이 아예 없으면(깨우기가 한 번도 안 돌았으면) 주기를 알 수 없으므로 기본 주기
+# 1800초의 3배인 5400초를 쓴다. 신고기가 갓 떴을 때 바로 외치지 않도록 이 경우의 기준 시각은
+# 심박 시각이 아니라 신고기 자신의 기동 시각이다.
+WAKER_SILENCE_FACTOR=3
+WAKER_DEFAULT_INTERVAL=1800
+WAKER_SILENCE_OVERRIDE="${STALL_REPORTER_WAKER_SILENCE_SEC:-}"
+case "$WAKER_SILENCE_OVERRIDE" in *[!0-9]*) WAKER_SILENCE_OVERRIDE="" ;; esac
+
 STATE_DIR="${STALL_REPORTER_STATE_DIR:-$HOME/.cache/rottie/stall-reporter}"
 mkdir -p "$STATE_DIR" 2>/dev/null || { echo "STATE_DIR_UNWRITABLE $STATE_DIR" >&2; exit 3; }
 SAFE_BOARD=$(printf '%s' "$BOARD" | tr -c 'A-Za-z0-9._-' '_')
@@ -75,13 +100,45 @@ STATE_FILE="$STATE_DIR/$SAFE_BOARD.state"
 # 상태: 이번 정체 사건에서 이미 알린 최고 임계값, 그리고 중계기 침묵 알림 여부.
 ALERTED_LEVEL=0
 RELAY_SILENT_ALERTED=0
+# B8: 감독 깨우기 심박 침묵을 이 사건에서 이미 알렸는지.
+WAKER_SILENT_ALERTED=0
 if [ -f "$STATE_FILE" ]; then
   # shellcheck disable=SC1090
   . "$STATE_FILE" 2>/dev/null || true
 fi
 
 save_state() {
-  printf 'ALERTED_LEVEL=%s\nRELAY_SILENT_ALERTED=%s\n' "$ALERTED_LEVEL" "$RELAY_SILENT_ALERTED" > "$STATE_FILE"
+  printf 'ALERTED_LEVEL=%s\nRELAY_SILENT_ALERTED=%s\nWAKER_SILENT_ALERTED=%s\n' \
+    "$ALERTED_LEVEL" "$RELAY_SILENT_ALERTED" "${WAKER_SILENT_ALERTED:-0}" > "$STATE_FILE"
+}
+
+# B8: 감독 깨우기가 살아 있는지. 심박 파일의 마지막 갱신 시각만 본다 — 이 파일에는 깨우기만 쓴다.
+#
+# 두 경우를 구분해서 내보낸다. 감독이 해야 할 행동이 다르기 때문이다.
+#   stopped - 심박이 있다가 끊겼다     -> 죽은 깨우기를 다시 띄워라
+#   absent  - 심박이 한 번도 없었다    -> 깨우기를 아직 안 띄웠다(2026-08-09 열한 시간 정지의 상태)
+# 둘을 "깨우기 이상" 하나로 접으면 "아직 안 만들었다"가 "죽었다"로 읽혀 엉뚱한 곳을 보게 된다.
+WAKER_STATE=absent
+WAKER_SILENT_FOR=0
+WAKER_LIMIT=0
+check_waker_heartbeat() {
+  local interval=""
+  if [ -f "$WAKER_HEARTBEAT_LOG" ]; then
+    WAKER_STATE=stopped
+    WAKER_SILENT_FOR=$(( NOW - $(file_mtime "$WAKER_HEARTBEAT_LOG") ))
+    # 주기는 깨우기가 심박 줄에 직접 적는다. 여기 상수로 베끼지 않는다.
+    interval=$(grep 'SUPERVISOR_WAKER_ALIVE' "$WAKER_HEARTBEAT_LOG" 2>/dev/null | tail -n 1 \
+      | sed -n 's/.*interval=\([0-9][0-9]*\).*/\1/p' | head -1)
+  else
+    # 기준 시각이 심박이 아니라 내 기동 시각이다. 갓 뜬 신고기가 즉시 외치지 않게 한다.
+    WAKER_STATE=absent
+    WAKER_SILENT_FOR=$(( NOW - REPORTER_START ))
+  fi
+  case "$interval" in ''|*[!0-9]*) interval="$WAKER_DEFAULT_INTERVAL" ;; esac
+  [ "$interval" -ge 1 ] || interval="$WAKER_DEFAULT_INTERVAL"
+  WAKER_LIMIT=$(( interval * WAKER_SILENCE_FACTOR ))
+  [ -n "$WAKER_SILENCE_OVERRIDE" ] && WAKER_LIMIT="$WAKER_SILENCE_OVERRIDE"
+  [ "$WAKER_SILENT_FOR" -ge 0 ] || WAKER_SILENT_FOR=0
 }
 
 log() {
@@ -159,6 +216,8 @@ log "start relay_log=$RELAY_LOG super_run=$SUPER_RUN_ID thresholds=$THRESHOLDS p
 # 동시에 약 28분 침묵했고 실제 원인은 맥 절전이었다). 그래서 이 스크립트 자신의 루프가
 # 얼었는지를 함께 본다. 내 잠이 예정보다 훨씬 길었다면 시스템이 멈춘 것이다.
 LAST_TICK=$(date +%s)
+# B8: 심박 파일이 아예 없을 때 "얼마나 없었는가"의 기준 시각. 신고기 자신의 기동 시각이다.
+REPORTER_START="$LAST_TICK"
 FREEZE_FACTOR=3
 # 갓 뜬 신고기는 비교할 과거 시각이 없어서 절전을 감지하지 못한다. 그래서 맥이
 # 자는 동안 낡은 일기를 보고 "감시자 사망"으로 오보한다(2026-08-08 실사고 — kyle이
@@ -259,6 +318,44 @@ $LAST_LINE
         log "alert supervisor_stall no_progress=$NO_PROGRESS level=$LEVEL judgement=$JUDGEMENT"
       fi
     fi
+  fi
+
+  # 사건 6. 감독 깨우기 심박 끊김 (2026-08-10 B8).
+  # 중계기 일기가 있든 없든 따로 본다. 깨우기는 중계기와 다른 프로세스이고, 중계기가 죽어도
+  # 깨우기는 살아 있어야 하기 때문이다(그 분리가 B8 의 핵심이다).
+  check_waker_heartbeat
+  if [ "$WAKER_SILENT_FOR" -ge "$WAKER_LIMIT" ] && [ "$NOW" -ge "$GRACE_UNTIL" ]; then
+    if [ "$WAKER_SILENT_ALERTED" -eq 0 ]; then
+      if [ "$WAKER_STATE" = absent ]; then
+        WAKER_SUBJECT="[정체신고] 감독 깨우기가 아예 없다 — $BOARD"
+        WAKER_HEAD="이 판에 감독 주기적 자가 점검 깨우기(supervisor-waker)가 한 번도 심박을 적지 않았다. 깨우기가 떠 있지 않다는 뜻이다."
+        WAKER_ACTION="깨우기를 띄워라: supervisor-waker.sh --board $BOARD --supervisor <감독 핸들> --run <프로젝트 Run> --relay-log $RELAY_LOG --runtime-dir <판 런타임 폴더>"
+      else
+        WAKER_SUBJECT="[정체신고] 감독 깨우기가 멈췄다 — $BOARD"
+        WAKER_HEAD="감독 주기적 자가 점검 깨우기(supervisor-waker)의 심박이 ${WAKER_SILENT_FOR}초 동안 갱신되지 않았다. 깨우기 프로세스가 죽었다."
+        WAKER_ACTION="죽은 깨우기를 다시 띄워라. 심박 파일의 마지막 줄에 죽기 직전 pid 와 주기가 남아 있다."
+      fi
+      send_alert "$WAKER_SUBJECT" \
+"$WAKER_HEAD
+
+깨우기가 없으면 감독은 편지가 왔을 때만 깨어난다. 편지가 안 오면 영원히 안 깨어난다 — 2026-08-09 열한 시간 정지가 정확히 그 상태였다. 판이 정상인지 아닌지와 무관한 문제다: 판정을 읽을 계기 자체가 없어진 것이다.
+
+판: $PROJECT / $BOARD
+심박 파일: $WAKER_HEARTBEAT_LOG
+상태: $WAKER_STATE (stopped=있다가 끊김, absent=한 번도 없음)
+마지막 심박 이후: ${WAKER_SILENT_FOR}초 (임계값 ${WAKER_LIMIT}초)
+
+$WAKER_ACTION
+이 알림은 이 사건에 대해 한 번만 보낸다. 심박이 다시 찍히면 자동으로 재장전된다." \
+"{\"event\":\"supervisor_waker_silent\",\"project\":\"$PROJECT\",\"board\":\"$BOARD\",\"wakerState\":\"$WAKER_STATE\",\"silentForSec\":$WAKER_SILENT_FOR,\"limitSec\":$WAKER_LIMIT,\"heartbeatLog\":\"$WAKER_HEARTBEAT_LOG\"}"
+      WAKER_SILENT_ALERTED=1
+      save_state
+      log "alert supervisor_waker_silent state=$WAKER_STATE silent_for=${WAKER_SILENT_FOR}s limit=${WAKER_LIMIT}s"
+    fi
+  elif [ "$WAKER_SILENT_ALERTED" -ne 0 ]; then
+    WAKER_SILENT_ALERTED=0
+    save_state
+    log "rearm supervisor_waker_recovered silent_for=${WAKER_SILENT_FOR}s"
   fi
 
   [ "$ONCE" -eq 1 ] && break
