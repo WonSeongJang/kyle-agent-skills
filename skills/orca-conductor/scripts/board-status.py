@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sqlite3
 import subprocess
 import sys
 import time
@@ -122,6 +123,43 @@ def board_name(objective: str) -> str:
     """objective 는 '판이름: 목표...' 형식이 관례다. 아니면 앞부분을 쓴다."""
     head = (objective or "").split(":", 1)[0].strip()
     return head[:34] if head else "(이름 없음)"
+
+
+ORCHESTRATION_DB = (
+    "/Users/fw_m1/Library/Application Support/Orca Kyle/orchestration.db"
+)
+# 사람이 읽어야 하는 편지 종류. status 는 진행 보고라 세되 앞세우지 않는다.
+LOUD_TYPES = ("escalation", "decision_gate", "question", "ask", "worker_done")
+
+
+def unread_mail(run_id: str) -> tuple[int, int, list[tuple[str, str]]] | None:
+    """(전체 안 읽음, 그중 시끄러운 것, 최근 제목 몇 개). 못 읽으면 None.
+
+    Why: 2026-08-10 실사고 — 사전검증이 NOT_READY 를 보냈는데 40분간 아무도 안 읽었고,
+    대시보드는 '대기 1' 만 보여줘서 막힌 것과 할 일이 남은 것을 구분할 수 없었다.
+    카드와 섞지 않고 우편함으로 따로 세운다 (kyle 지시).
+
+    'alive' 하트비트는 생존 신호라 사람이 읽을 것이 아니므로 제외한다.
+    """
+    if not Path(ORCHESTRATION_DB).exists():
+        return None
+    base = (
+        "from messages where read=0 and run_id=? "
+        "and type<>'heartbeat' and subject<>'alive'"
+    )
+    try:
+        with sqlite3.connect(f"file:{ORCHESTRATION_DB}?mode=ro", uri=True, timeout=5) as db:
+            total = db.execute(f"select count(*) {base}", (run_id,)).fetchone()[0]
+            marks = ",".join("?" * len(LOUD_TYPES))
+            loud = db.execute(
+                f"select count(*) {base} and type in ({marks})", (run_id, *LOUD_TYPES)
+            ).fetchone()[0]
+            recent = db.execute(
+                f"select type, subject {base} order by sequence desc limit 2", (run_id,)
+            ).fetchall()
+    except sqlite3.Error:
+        return None
+    return total, loud, [(row[0] or "", row[1] or "") for row in recent]
 
 
 def seat_warning(task: dict, terminals: dict | None) -> tuple[str, str]:
@@ -297,6 +335,25 @@ def main() -> int:
                 code, note = seat_warning(task, terminals)
                 mark = paint(code, note) if note else ""
                 print(f"          {paint(CYAN, '▸')} {label}{mark}")
+
+        mail = unread_mail(run.get("id", ""))
+        if mail is None:
+            print(f"   우편함 {paint(DIM, '못 읽음 — 0통이 아니라 모름')}")
+        else:
+            total, loud, recent = mail
+            if total == 0:
+                print(f"   우편함 {paint(GREEN, '안 읽은 편지 없음')}")
+            else:
+                # 총 통수만 크게 보이면 겁만 주고 판단이 안 된다.
+                # 실제로 사람을 부르는 종류(정체·결정·질문·완료)를 따로 센다.
+                if loud:
+                    head = f"안 읽음 {total}통 · 그중 봐야 할 것 {loud}  ⚠"
+                    print(f"   우편함 {paint(RED, head)}")
+                else:
+                    print(f"   우편함 {paint(YELLOW, f'안 읽음 {total}통 (전부 진행 보고류)')}")
+                for kind, subject in recent:
+                    tag = f"[{kind}] " if kind and kind != "status" else ""
+                    print(f"          {paint(CYAN, '▸')} {tag}{subject[:64]}")
 
         entry = relay_logs.get(name)
         if entry is None:
