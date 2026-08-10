@@ -569,6 +569,9 @@ function route() {
 
 function boardWarns(b) {
   const w = [];
+  // 안 읽은 편지는 "대기"와 완전히 다른 이야기다 — 40분 정체를 아무도 못 본 실사고 (2026-08-10).
+  if (DATA.messages !== null && DATA.messages.some((m) => m.run_id === b.run_id && !m.read))
+    w.push("편지");
   if (b.gates && b.gates.some((g) => (g.status || "pending") === "pending")) w.push("관문");
   if (b.relay && b.relay.age_sec !== undefined && b.relay.age_sec > b.relay.dead_sec) w.push("중계기");
   if (!b.companions.length) w.push("깨우미");
@@ -681,6 +684,21 @@ function boardSummaryCard(b) {
   for (const t of (b.tasks || []).filter((t) => t.status === "dispatched"))
     card.appendChild(el("div", "row accent", "   ▸ " + t.title));
 
+  const mail = el("div", "row");
+  mail.appendChild(el("span", "label", "편지"));
+  let unreadMsgs = [];
+  if (DATA.messages === null) mail.appendChild(el("span", "bad", "모름 — 우편함을 못 읽었다"));
+  else {
+    unreadMsgs = DATA.messages.filter((m) => m.run_id === b.run_id && !m.read);
+    if (unreadMsgs.length) mail.appendChild(el("span", "warn", "안 읽음 " + unreadMsgs.length + " ⚠"));
+    else mail.appendChild(el("span", "dim", "안 읽음 0"));
+  }
+  card.appendChild(mail);
+  for (const m of unreadMsgs.slice(0, 3))
+    card.appendChild(el("div", "row warn", "   ▸ " + (m.subject || "(제목 없음)")));
+  if (unreadMsgs.length > 3)
+    card.appendChild(el("div", "row dim", "   … 외 " + (unreadMsgs.length - 3) + "통 (판 페이지에서)"));
+
   const gates = (b.gates || []).filter((g) => (g.status || "pending") === "pending");
   if (gates.length) {
     const g = el("div", "row"); g.appendChild(el("span", "label", "관문"));
@@ -730,6 +748,9 @@ function pageBoard(main, runId) {
     : "모델을 못 읽어 판단 불가";
   tiles.appendChild(tile("Context", b.context_pct === null ? null : b.context_pct + "%", ctxNote));
   tiles.appendChild(tile("주간 잔여", b.weekly_left));
+  const unreadCnt = DATA.messages === null ? null
+    : DATA.messages.filter((m) => m.run_id === b.run_id && !m.read).length;
+  tiles.appendChild(tile("안 읽은 편지", unreadCnt, unreadCnt ? "⚠ 아래 편지 절 확인" : ""));
   if (b.cards) {
     tiles.appendChild(tile("도는 중", b.cards.dispatched || 0));
     tiles.appendChild(tile("대기", b.cards.ready || 0));
