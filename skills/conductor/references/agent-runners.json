@@ -76,6 +76,25 @@
         "kimi-coding": "기본값(k3). 2026-08-10 기준 주간 99% 소진이라 사실상 못 쓴다.",
         "openai-codex": "gpt-5.6-sol / luna / terra / 5.5 / 5.4 등. ChatGPT 구독 인증."
       },
+      "자체_오케스트레이션": {
+        "결론": "카드만 줘도 서브에이전트를 스스로 띄운다. 스킬을 부를 필요가 없다.",
+        "measured": "2026-08-10",
+        "evidence": "A3-R4 세션(~/.senpi/agent/sessions/--Users-fw_m1-orca-workspaces-conductor-core-contract-1-a6-review--/2026-08-10T02-32-18-524Z_019fe983-...jsonl)에서 스킬 호출 0회인데도 task 3회(category:unspecified-high 1, subagent_type:explore 1), lsp_symbols 1 / lsp_diagnostics 2 / lsp_find_references 3, mcp__ast_grep_search 5, eval 27, read 18, bash 8, apply_patch 1. omo 플러그인 훅 omo-senpi:wake 10회, loop-guard:notice, senpi.hooks.stop-state 도 함께 찍혔다.",
+        "세 갈래로 나눠 본다": {
+          "자동": "서브에이전트·LSP·ast-grep·wake 훅. 카드만 줘도 발동한다.",
+          "말해야 됨": "start-work / review-work / hyperplan / ulw-* 등 워크플로 스킬. SKILL.md 설명문에 'Triggers: review work, review my work, ...' 처럼 발동 낱말이 적혀 있고 모델이 그걸 보고 고른다. 카드에 그 낱말이 없으면 안 뽑는다.",
+          "무조건": "ultrawork / ulw. 입력 훅이 프롬프트에 그 낱말이 있으면 지시문을 강제 주입한다(customType omo-ultrawork:directive). 모델 판단이 아니라 코드다."
+        },
+        "스킬 위치": "$(npm root -g)/omo-ai/plugin/skills — 21종. 사용자 스킬은 ~/.senpi/agent/skills (여기엔 orca orchestration 이 심볼릭 링크로 걸려 있다).",
+        "발령 시 원칙": "실제로 쓸 방식 그대로 준다. 스킬 이름을 넣으면 'omo 가 어떤가'가 아니라 '그 스킬이 좋은가'를 재게 된다."
+      },
+      "시간_기록": {
+        "결론": "omo 는 턴마다 걸린 시간을 스스로 찍는다. 우리가 따로 잴 필요 없다.",
+        "형식": "화면 마지막 줄 — 'TPS 38.0 tok/s. Cache hit 98.9%, 101.9s'",
+        "measured": "2026-08-10",
+        "세션 전체": "세션 파일의 첫/마지막 timestamp 로 잰다. A3-R4 는 02:32:18 -> 02:52:34 = 20분 16초.",
+        "주의": "화면의 초는 그 턴 하나이고 세션 전체가 아니다. 둘을 섞지 않는다."
+      },
       "quirks": [
         {
           "date": "2026-08-10",
@@ -85,7 +104,8 @@
         {
           "date": "2026-08-10",
           "what": "서브에이전트는 별도 자식 프로세스다(문서: 'A senpi-task or subagent child process reads its own settings').",
-          "판정": "프로세스 격리는 진짜지만 판단 독립은 아니다. 부모가 틀을 짜서 넘기므로 '다른 쪽이 자기 근거로 반대하는' 검수는 대체하지 못한다. 대체 가능 여부는 같은 카드를 (a) omo 자체 검수 (b) 별도 검수자 티키타카로 돌려 잡아낸 결함 수를 비교해 판정한다. 아직 안 했다."
+          "판정": "프로세스 격리는 진짜지만 판단 독립은 아니다. 부모가 틀을 짜서 넘기므로 '다른 쪽이 자기 근거로 반대하는' 검수는 대체하지 못한다 — 이건 아직 추정이다.",
+          "시험": "EXP-RI-1 (2026-08-10 발령). 구현을 1회만 하고 그 코드를 (A) 새 세션 검수자 (B) 구현한 그 세션의 자기 검수 로 나눠 검수해 발견·누락·오탐 수를 센다. 구현을 두 번 하면 결함 자체가 갈라져 비교가 안 되므로 1회로 고정했다. 발령장: conductor-core/.staging/exp-review-independence-1.md, 결과: .staging/result-EXP-RI-1.md"
         },
         {
           "date": "2026-08-10",
