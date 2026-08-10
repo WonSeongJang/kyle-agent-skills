@@ -625,6 +625,11 @@ function isRelayRoutine(m) {
   const names = (m.from_name || "") + " " + (m.to_name || "");
   return names.includes("중계기") || /^(re: ?)?relay_/i.test(m.subject || "");
 }
+// 로그 편지 = 중계기 일상 통신 + 생존신호(heartbeat). 발신자는 달라도(중계기 vs 작업자)
+// "사람이 평소 읽을 우편이 아니라 기록"이라는 점이 같아 한 토글로 묶는다 (2026-08-10 kyle).
+function isLogMail(m) {
+  return m.type === "heartbeat" || isRelayRoutine(m);
+}
 
 function det(key, summaryText, contentNode) {
   const d = el("details");
@@ -778,8 +783,8 @@ function boardSummaryCard(b) {
   let mine = [];
   if (DATA.messages === null) mail.appendChild(el("span", "bad", "모름 — 우편함을 못 읽었다"));
   else {
-    // 중계기 일상편지는 판 요약에서도 제외한다 — 경보(escalation·gate)는 isRelayRoutine 이 남긴다.
-    mine = DATA.messages.filter((m) => m.run_id === b.run_id && !isRelayRoutine(m));
+    // 로그 편지(중계기 통신·생존신호)는 판 요약에서도 제외 — 경보·관문은 isLogMail 이 남긴다.
+    mine = DATA.messages.filter((m) => m.run_id === b.run_id && !isLogMail(m));
     mail.appendChild(el("span", "dim", mine.length ? "최근 3통" : "없음"));
   }
   card.appendChild(mail);
@@ -921,10 +926,10 @@ function pageBoard(main, runId) {
   const mailCard = el("div", "card");
   const allMine = DATA.messages === null ? null : DATA.messages.filter((m) => m.run_id === b.run_id);
   const mine = allMine === null ? null
-    : (hideRelayMail ? allMine.filter((m) => !isRelayRoutine(m)) : allMine);
+    : (hideRelayMail ? allMine.filter((m) => !isLogMail(m)) : allMine);
   const hiddenCnt = allMine === null ? 0 : allMine.length - mine.length;
   const h3 = el("h3", null, "이 판의 편지 ");
-  if (hiddenCnt) h3.appendChild(el("span", "dim", "(중계기 일상편지 " + hiddenCnt + "통 숨김 — 우편함에서 전환)"));
+  if (hiddenCnt) h3.appendChild(el("span", "dim", "(로그 편지 " + hiddenCnt + "통 숨김 — 우편함에서 전환)"));
   mailCard.appendChild(h3);
   mailCard.appendChild(mailList(mine, "board-" + b.run_id, false));
   main.appendChild(mailCard);
@@ -983,15 +988,15 @@ function mailList(msgs, keyPrefix, showBoard) {
     const top = el("div", "msg-top");
     top.appendChild(el("span", "chip " + info.cls,
       info.ko + (m.priority === "high" && m.type !== "escalation" ? "·급함" : "")));
-    if (showBoard) top.appendChild(el("span", "chip", m.board));
+    if (showBoard) top.appendChild(el("span", "chip", "판 · " + m.board));
     top.appendChild(el("span", "subject" + (m.type === "escalation" ? " warn" : ""), m.subject || "(제목 없음)"));
     top.appendChild(el("span", "msg-age dim", ageOf(m.created_at)));
     row.appendChild(top);
-    // 우편함에서 중요한 건 받는 사람이다 (kyle) — 받는이 먼저, 받는이만 밝게.
+    // 보낸사람 → 받는사람 순서로 통일 (kyle) — 강조는 여전히 받는사람에게.
     const sub = el("div", "msg-sub");
-    const to = el("span", "to", roleShort(m.to_name, m.board)); to.title = m.to_handle || "";
     const from = el("span", null, roleShort(m.from_name, m.board)); from.title = m.from_handle || "";
-    sub.appendChild(to); sub.appendChild(document.createTextNode(" ← ")); sub.appendChild(from);
+    const to = el("span", "to", roleShort(m.to_name, m.board)); to.title = m.to_handle || "";
+    sub.appendChild(from); sub.appendChild(document.createTextNode(" → ")); sub.appendChild(to);
     const u = untouchedSec(m);
     if (u !== null)
       sub.appendChild(el("span", u > MAIL_DEAD_SEC ? "bad" : u > MAIL_WARN_SEC ? "warn" : "dim",
@@ -1006,12 +1011,13 @@ function mailList(msgs, keyPrefix, showBoard) {
 function pageMail(main) {
   main.appendChild(el("h2", null, "우편함"));
   main.appendChild(el("div", "sub",
-    "'아무도 안 읽음' = 감독·중계기·companion·슈퍼 넷 중 누구도 아직 안 집은 편지 (누가 안 읽었는지 구분은 B2 커서 계약 후)"
-    + " · 읽음 처리 없이 보기만 한다 (감독 편지를 안 가로챔)."));
+    "줄마다: [편지 종류 칩] [판 · 어느 판 칩] 제목 … 시각 / 보낸사람 → 받는사람(밝은 글씨)."
+    + " '아무도 안 읽음' = 감독·중계기·companion·슈퍼 넷 중 누구도 아직 안 집은 편지."
+    + " 읽음 처리 없이 보기만 한다 (감독 편지를 안 가로챔)."));
   const bar = el("div", "row");
-  const relayCnt = DATA.messages === null ? 0 : DATA.messages.filter(isRelayRoutine).length;
+  const logCnt = DATA.messages === null ? 0 : DATA.messages.filter(isLogMail).length;
   const base = DATA.messages === null ? null
-    : (hideRelayMail ? DATA.messages.filter((m) => !isRelayRoutine(m)) : DATA.messages);
+    : (hideRelayMail ? DATA.messages.filter((m) => !isLogMail(m)) : DATA.messages);
   const total = base === null ? "?" : base.length;
   const untouchedCnt = base === null ? "?" : base.filter((m) => !m.read).length;
   const mkBtn = (active, label, onclick) => {
@@ -1023,8 +1029,10 @@ function pageMail(main) {
   bar.appendChild(mkBtn(mailFilter === "all", "전체 " + total, () => { mailFilter = "all"; render(); }));
   bar.appendChild(mkBtn(mailFilter === "untouched", "아무도 안 읽음 " + untouchedCnt,
     () => { mailFilter = "untouched"; render(); }));
-  bar.appendChild(mkBtn(!hideRelayMail, (hideRelayMail ? "중계기 일상편지 숨김 " : "중계기 일상편지 표시 ") + relayCnt,
-    () => { hideRelayMail = !hideRelayMail; render(); }));
+  const logBtn = mkBtn(!hideRelayMail, (hideRelayMail ? "로그 편지 숨김 " : "로그 편지 표시 ") + logCnt,
+    () => { hideRelayMail = !hideRelayMail; render(); });
+  logBtn.title = "로그 편지 = 중계기 일상 통신(순찰·감시 갱신) + 작업자 생존신호(heartbeat). 경보·관문은 절대 안 숨김.";
+  bar.appendChild(logBtn);
   main.appendChild(bar);
   const shown = base === null ? null
     : (mailFilter === "untouched" ? base.filter((m) => !m.read) : base);
