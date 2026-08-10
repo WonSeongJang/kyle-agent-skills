@@ -101,6 +101,23 @@ def parse_weekly_left(preview: str) -> str | None:
     return f"{match.group(1)}%" if match else None
 
 
+def parse_model(preview: str) -> str | None:
+    """상태바의 모델 이름. 예: 'gpt-5.6-sol medium · ~/Dev/...'"""
+    match = re.search(r"(gpt-[\w.\-]+|opus|fable|zai/[\w.\-]+|kimi/[\w.\[\]\-]+)", preview or "")
+    return match.group(1) if match else None
+
+
+def autocompacts(model: str | None) -> bool | None:
+    """상주 역할에서 자동 압축을 믿어도 되는 계열인가.
+
+    True = 믿는다(gpt 계열), False = 교대가 필요하다, None = 모델을 못 읽었다.
+    근거: mechanics.md '교대 기준은 모델 계열마다 다르다' (2026-08-10 kyle 결정).
+    """
+    if model is None:
+        return None
+    return model.startswith("gpt-")
+
+
 def board_name(objective: str) -> str:
     """objective 는 '판이름: 목표...' 형식이 관례다. 아니면 앞부분을 쓴다."""
     head = (objective or "").split(":", 1)[0].strip()
@@ -209,15 +226,24 @@ def main() -> int:
         ctx = parse_context_pct(preview)
         weekly = parse_weekly_left(preview)
 
+        model = parse_model(preview)
+        compacts = autocompacts(model)
+
         if ctx is None:
             ctx_text = paint(DIM, "Context 모름")
-        elif ctx >= CONTEXT_WARN:
-            ctx_text = paint(RED, f"Context {ctx}% ⚠ 교대 조건")
-        else:
+        elif ctx < CONTEXT_WARN:
             ctx_text = f"Context {ctx}%"
+        elif compacts is True:
+            # gpt 계열은 80% 를 넘겨도 압축에 맡긴다 — 경고가 아니라 관찰이다.
+            ctx_text = paint(YELLOW, f"Context {ctx}% (압축에 맡김 · 계속 오르면 교대)")
+        elif compacts is False:
+            ctx_text = paint(RED, f"Context {ctx}% ⚠ 교대 필요 — {model} 은 자동 압축을 기대할 수 없다")
+        else:
+            ctx_text = paint(YELLOW, f"Context {ctx}% (모델을 못 읽어 교대 여부 판단 불가)")
 
+        model_text = f"   {paint(DIM, model)}" if model else ""
         print(f"{BOLD}{name}{RESET}  {paint(DIM, run.get('id', ''))}")
-        print(f"   감독   {ctx_text}" + (f"   주간 잔여 {weekly}" if weekly else ""))
+        print(f"   감독   {ctx_text}{model_text}" + (f"   주간 잔여 {weekly}" if weekly else ""))
 
         tasks_data = run_json(
             orca, ["orchestration", "task-list", "--run", run.get("id", "")]
