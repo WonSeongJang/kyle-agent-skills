@@ -336,3 +336,11 @@
 - 전환 이벤트: 최종 통합 commit `165153a06`의 서명 빌드·격리 패키지 E2E PASS 뒤 운영 앱을 PID `62007`→`30017`으로 교체했다. 교체 뒤 supervisor/relay rebind 및 worker_done capability 재검증이 필요했고, 폐기된 capability에 대한 worker_done이 6회 거부된 뒤 감독이 수동 종결했다. relay v2·companion·kicker는 PPID 1로 복구했다.
 - 결말: 마감 완료 — receipt 실효 PASS와 TCC 권한 유지 PASS를 확인했다. `get-app-state`는 구 빌드와 동일한 결함 E로 후속 이월한다.
 - 관찰: 고정 서명은 TCC grant 유지 대상을 충족했지만 권한 표시와 실제 기능 동작은 분리해 기록해야 한다. 앱 교체 뒤에는 dispatch capability 폐기와 rebind를 복구 절차의 한 단계로 고정하고, 재검증 실패 시 worker_done을 성공으로 올리지 말고 감독 수동 종결까지 남겨야 한다.
+
+### 2026-08-07~08 [판:orca-integration-1] 영수증 강제 변경 통합·실앱 재검증
+
+- 성격: 보안 경계·오래된 브랜치 통합·실앱 E2E·문서 생성물 동기화 · 무게: HEAVY · 구현: GLM 5.2 max · 검수: Sol medium.
+- 라운드: 통합 구현 뒤 독립 검수 R1에서 중요 2건(DB 인덱스 복구 호출 유실, 잘못된 receipt 안내 7곳) → R2 수정 뒤 독립 재검수 중요 1건(번들 안내서 stale) → 최종 R3에서 생성물 동기화 후 좁은 독립 재검수 `CODE_PASS`. 실앱 4시나리오와 변이 거부는 R1 통과 증거를 재사용했다.
+- 전환 이벤트: R3 범위를 `src/cli/bundled-skill-guides.ts`의 결정적 재생성 한 건으로 축소해 전체 실앱 검증 반복을 막았다. DeepSeek 대화형 중계기 교체는 승인 창 때문에 두 번 실패해 중단하고 Luna로 복귀했다.
+- 결말: 합격·머지·push 완료. 복구용 카드 커밋 `15e747676063ceb57596811d8d901c40941e46d3`, 병합 커밋 `538750de6191f83d20c2f24499bb71e3a73c8b93` (총 3왕복).
+- 관찰: 대화형 Command Code 창은 무인 셸 순찰과 권한 전제가 맞지 않는다. DeepSeek 자체 실패로 기록하지 말고, 저비용 중계기는 헤드리스 1회 호출 구조로 따로 검증한다. 중계기 교체는 후임의 실제 로그를 본 뒤 선임을 닫는 순서를 지켜 감시 공백을 막았다.

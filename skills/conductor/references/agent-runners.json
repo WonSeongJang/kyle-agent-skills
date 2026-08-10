@@ -85,7 +85,13 @@
         "openai-codex": "gpt-5.6-sol / luna / terra / 5.5 / 5.4 등. ChatGPT 구독 인증."
       },
       "자체_오케스트레이션": {
-        "결론": "카드만 줘도 서브에이전트를 스스로 띄운다. 스킬을 부를 필요가 없다.",
+        "결론": "카드만 줘도 서브에이전트를 스스로 띄울 수 있다. 스킬을 부를 필요가 없다. 다만 '항상 띄운다'는 아니다 — 아래 '언제 안 띄우나' 참고.",
+        "언제 안 띄우나": {
+          "무엇": "같은 omo 인데도 0개인 실행이 있다. 2026-08-10 EXP-RI-1 실측: gpt-5.6-sol 은 3개(A3-R4)·5개(심판)를 띄웠고, gpt-5.6-terra 는 구현·팔A·팔B 세 실행 모두 0개였다.",
+          "measured": "2026-08-10",
+          "판정": "모델에 따라 갈릴 가능성이 있다는 관측일 뿐이다. terra 4건 / sol 2건으로는 모델 때문인지 과제 성격 때문인지 못 가른다. 단정하지 않는다.",
+          "그래서": "'omo 니까 알아서 판다'를 전제로 카드를 얇게 쓰지 않는다. 검수 카드에는 무엇을 어디까지 파야 하는지 그대로 적는다."
+        },
         "measured": "2026-08-10",
         "evidence": "A3-R4 세션(~/.senpi/agent/sessions/--Users-fw_m1-orca-workspaces-conductor-core-contract-1-a6-review--/2026-08-10T02-32-18-524Z_019fe983-...jsonl)에서 스킬 호출 0회인데도 task 3회(category:unspecified-high 1, subagent_type:explore 1), lsp_symbols 1 / lsp_diagnostics 2 / lsp_find_references 3, mcp__ast_grep_search 5, eval 27, read 18, bash 8, apply_patch 1. omo 플러그인 훅 omo-senpi:wake 10회, loop-guard:notice, senpi.hooks.stop-state 도 함께 찍혔다.",
         "세 갈래로 나눠 본다": {
