@@ -176,11 +176,15 @@ def collect(orca: str) -> dict:
             continue
 
         preview = term.get("preview", "")
+        model = bs.parse_model(preview)
         board: dict = {
             "name": name,
             "run_id": run.get("id", ""),
             "context_pct": bs.parse_context_pct(preview),
             "context_warn": bs.CONTEXT_WARN,
+            "model": model,
+            # True=gpt 계열(압축에 맡김), False=교대 필요, None=모델 못 읽음 (board-status.py 기준)
+            "autocompacts": bs.autocompacts(model),
             "weekly_left": bs.parse_weekly_left(preview),
             "cards": None,   # 상태별 개수. None = 모름
             "tasks": None,   # 카드 전체 목록. None = 모름
@@ -627,10 +631,14 @@ function pageOverview(main) {
 
 function ctxNode(b) {
   if (b.context_pct === null) return el("span", "dim", "Context 모름");
-  if (b.context_pct >= b.context_warn)
-    // 80% 한 번 읽은 것은 교대 근거가 아니다 (2026-08-10 kyle 결정, mechanics.md) —
-    // 계속 오르는지 두 번 이상 관측한 뒤에 교대를 검토한다.
-    return el("span", "warn", "Context " + b.context_pct + "% ⚠ 높음 — 계속 오르는지 볼 것");
+  if (b.context_pct >= b.context_warn) {
+    // 교대 기준은 모델 계열마다 다르다 (2026-08-10 kyle 결정, mechanics.md / board-status.py 와 동일 기준).
+    if (b.autocompacts === true)
+      return el("span", "warn", "Context " + b.context_pct + "% (압축에 맡김 · 계속 오르면 교대)");
+    if (b.autocompacts === false)
+      return el("span", "bad", "Context " + b.context_pct + "% ⚠ 교대 필요 — " + b.model + " 은 자동 압축을 기대할 수 없다");
+    return el("span", "warn", "Context " + b.context_pct + "% (모델을 못 읽어 교대 여부 판단 불가)");
+  }
   return el("span", null, "Context " + b.context_pct + "%");
 }
 
@@ -702,8 +710,11 @@ function pageBoard(main, runId) {
   main.appendChild(el("div", "sub mono", b.run_id));
 
   const tiles = el("div", "tiles");
-  tiles.appendChild(tile("Context", b.context_pct === null ? null : b.context_pct + "%",
-                         b.context_pct !== null && b.context_pct >= b.context_warn ? "높음 — 계속 오르는지 볼 것" : ""));
+  const ctxNote = b.context_pct === null || b.context_pct < b.context_warn ? ""
+    : b.autocompacts === true ? "압축에 맡김 · 계속 오르면 교대"
+    : b.autocompacts === false ? "⚠ 교대 필요 (" + b.model + ")"
+    : "모델을 못 읽어 판단 불가";
+  tiles.appendChild(tile("Context", b.context_pct === null ? null : b.context_pct + "%", ctxNote));
   tiles.appendChild(tile("주간 잔여", b.weekly_left));
   if (b.cards) {
     tiles.appendChild(tile("도는 중", b.cards.dispatched || 0));
