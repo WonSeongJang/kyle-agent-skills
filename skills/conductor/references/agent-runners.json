@@ -42,12 +42,14 @@
       "quirks": [
         {
           "date": "2026-08-10",
-          "what": "codex 가 대화에 developer 지시를 직접 주입한다: 'The model catalog changed after Codex started; do not set model or reasoning_effort overrides until Codex restarts.' 이 지시를 받은 에이전트는 발령 명령에 --model 을 붙이는 것도 거부한다.",
-          "출처": "codex 실행 바이너리 안에 있는 문자열이다. 우리 설정 파일이 아니라서 아무리 찾아도 안 나온다.",
-          "trigger": "codex 바이너리 업데이트(09:47:59)와 그보다 먼저 뜬 ChatGPT.app 의 codex app-server(09:30:06) 사이의 카탈로그 불일치로 보인다.",
-          "evidence": "CLI 세션을 두 번 새로 띄워도 계속 주입됨(에이전트에게 직접 물어 YES 확인). 같은 모델을 omo 로 띄우면 NO.",
-          "workaround": "기술적 차단이 아니라 지시문이다(--model 을 준 실행 8회 전부 정상 작동). 그래도 에이전트는 규칙 계층상 따르므로, 실무 해법은 (a) 'Codex'(ChatGPT.app app-server) 재시작 또는 (b) 다른 실행기 사용이다.",
-          "미해결": "'until Codex restarts' 의 Codex 가 정확히 무엇인지 미확정. CLI 세션 재시작으로는 안 풀렸다."
+          "what": "대화에 developer 지시가 주입된다: 'The model catalog changed after Codex started; do not set model or reasoning_effort overrides until Codex restarts.' 이 지시를 받은 에이전트는 발령 명령에 --model 을 붙이는 것도 거부한다.",
+          "출처": "codex 가 아니라 opencodex 프록시다. src/server/responses/collaboration.ts:250. 2026-08-10 오전에 'codex 바이너리 안의 문자열'이라고 적었던 것은 틀렸다 — codex 패키지 전체를 grep 하면 0건이고 opencodex 에만 있다.",
+          "진짜 원인": "opencodex 의 로케일 버그다. 판정 코드는 app-server 프로세스의 시작 시각과 카탈로그 파일 mtime 을 비교하는데(app-server-processes.ts:630), 시작 시각을 execFileSync('ps',['-o','pid=,lstart=',...]) 뒤 Date.parse 로 읽는다(:493,:503). 시스템 로케일이 한국어면 ps 가 '2026년 8월 10일 월요일 12시 13분 19초'를 내고 Date.parse 는 NaN 을 낸다. 그러면 state='unknown' 으로 떨어지고, collaboration.ts:249 는 'stale' 과 'unknown' 을 똑같이 취급해 그 지시문을 낸다.",
+          "measured": "2026-08-10",
+          "evidence": "대조군까지 붙여 실측했다. 한국어 로케일: ps 원문 '2026년  8월 10일 월요일 12시 13분 19초' → Date.parse = NaN. LC_ALL=C: 'Mon Aug 10 12:13:19 2026' → Date.parse = 1786331599000. 그리고 ocx doctor 가 '[WARN] Could not verify whether the running Codex app-server's model catalog is current (start time or catalog unreadable)' 로 unknown 임을 확인해 준다.",
+          "왜 재시작이 안 통하나": "app-server 는 PID 하나뿐이고 ChatGPT.app 재시작으로 실제로 새로 떴다(12:13:19 > 카탈로그 mtime 09:29:40). 시각 비교만 되면 fresh 였을 상황인데, 그 시각을 못 읽어서 영원히 unknown 이다. 몇 번을 재시작해도 안 풀린다.",
+          "처방": "(a) 프록시를 영어 시간 로케일로 재시작 — LC_TIME=C ocx restart, (b) ocx v2 off — 지시문은 surface==='v2' 일 때만 나온다, (c) 급하면 omo 사용(프록시를 안 거친다).",
+          "함께 관측": "ws://127.0.0.1:10100/v1/responses 가 426 Upgrade Required 를 낸다. 같이 보이지만 이 지시문의 원인은 아니다 — 원인은 위의 로케일 판정이다. 두 개를 인과로 묶지 않는다."
         }
       ]
     },
