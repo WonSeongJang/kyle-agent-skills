@@ -120,8 +120,17 @@ def autocompacts(model: str | None) -> bool | None:
 
 
 def board_name(objective: str) -> str:
-    """objective 는 '판이름: 목표...' 형식이 관례다. 아니면 앞부분을 쓴다."""
-    head = (objective or "").split(":", 1)[0].strip()
+    """objective 는 '판이름: 목표...' 또는 '[판:판이름] 목표...' 형식이 관례다.
+
+    대괄호 접두를 못 풀면 이름이 '[판'으로 잘려 companion·중계기 일기 매칭(이름 기준)이
+    전부 빗나간다 — 2026-08-11 실사고: omo-deep-analysis-1 이 companion=0 으로 오보됐고
+    그 판 감독이 실측 대조로 신고했다.
+    """
+    text = (objective or "").strip()
+    m = re.match(r"^\[판[::]\s*([^\]]+)\]", text)
+    if m:
+        return m.group(1).strip()[:34]
+    head = text.split(":", 1)[0].strip()
     return head[:34] if head else "(이름 없음)"
 
 
