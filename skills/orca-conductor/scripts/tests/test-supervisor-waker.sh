@@ -27,9 +27,14 @@ fail() { FAIL_COUNT=$((FAIL_COUNT + 1)); printf 'FAIL %s\n' "$1" >&2; }
 # 되돌리는 대상은 전부 이 시험이 만든 /tmp 아래 고유 경로의 프로세스다.
 SPAWNED_PIDS=()
 cleanup() {
-  local p
+  local p child
   for p in "${SPAWNED_PIDS[@]:-}"; do
     [ -n "$p" ] || continue
+    # 가짜 daemon(bash)이 띄운 자식(sleep)까지 되돌린다. 부모만 죽이면 자식이
+    # 고아로 최대 120초 남아 다음 시험 관측을 오염시킨다.
+    for child in $(pgrep -P "$p" 2>/dev/null); do
+      kill "$child" 2>/dev/null || true
+    done
     kill "$p" 2>/dev/null || true
   done
 }
@@ -69,14 +74,19 @@ make_task_list_raw() { printf '%s\n' "$2" > "$1/task_list.json"; }
 # 중간 셸을 즉시 끝내 고아로 만든다. `( cmd & )` 가 그 일을 한다.
 # $1 = 판 폴더(런타임 폴더), $2 = 스크립트 이름, $3 = 명령줄에 붙일 인자(선택)
 # $3 은 "판 신분이 경로가 아니라 인자에 있는" 실제 배치를 재현할 때 쓴다.
+# 결과 PID는 전역 변수 SPAWNED_PID 로 돌려준다. `pid=$(spawn_fake_daemon ...)` 처럼
+# 명령 치환으로 받으면 함수가 하위 셸에서 돌아 SPAWNED_PIDS 등록이 부모에게 전달되지
+# 않고 cleanup 이 그 PID 를 놓친다(2026-08-11 실측: 시험당 가짜 daemon 5개 잔여).
+# 그래서 호출부는 반드시 `spawn_fake_daemon ...; pid=$SPAWNED_PID` 형태로 받는다.
 spawn_fake_daemon() {
   local runtime_dir="$1" name="$2" extra="${3:-}" path pid match
+  SPAWNED_PID=""
   mkdir -p "$runtime_dir/v3"
   path="$runtime_dir/v3/$name"
   printf '#!/bin/bash\nsleep 120\n' > "$path"
-  # 표준입출력을 반드시 끊는다. 이 함수는 `$( )` 안에서 불리는데, 고아 프로세스가
-  # 그 명령 치환의 파이프 쓰기 끝을 물고 있으면 **자식이 끝날 때까지 치환이 안 닫힌다.**
-  # 실측: 이것 하나로 시험 한 번이 6분 넘게 멈춰 있었다(자식 수명 120초 x 호출 수).
+  # 표준입출력을 반드시 끊는다. 고아 프로세스가 부모의 출력 파이프를 물고 있으면
+  # 호출부가 **자식이 끝날 때까지 멈춘다.** 실측: 이것 하나로 시험 한 번이
+  # 6분 넘게 멈춰 있었다(자식 수명 120초 x 호출 수).
   if [ -n "$extra" ]; then
     # shellcheck disable=SC2086  # 인자를 여러 토막으로 넘기려고 일부러 안 감쌌다.
     ( bash "$path" $extra >/dev/null 2>&1 </dev/null & )
@@ -91,13 +101,12 @@ spawn_fake_daemon() {
     pid=$(pgrep -f "$match" 2>/dev/null | head -1)
     if [ -n "$pid" ] && [ "$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')" = "1" ]; then
       SPAWNED_PIDS+=("$pid")
-      printf '%s' "$pid"
+      SPAWNED_PID="$pid"
       return 0
     fi
     sleep 0.05
     waited=$((waited + 1))
   done
-  printf ''
   return 1
 }
 
@@ -214,8 +223,8 @@ test_heartbeat_does_not_touch_relay_log() {
 test_scoped_companion_death() {
   local sd mine_pid other_pid dead
   sd=$(new_state); setup_board "$sd"
-  mine_pid=$(spawn_fake_daemon "$sd/mine" conductor-companion.sh)
-  other_pid=$(spawn_fake_daemon "$sd/other" conductor-companion.sh)
+  spawn_fake_daemon "$sd/mine" conductor-companion.sh; mine_pid=$SPAWNED_PID
+  spawn_fake_daemon "$sd/other" conductor-companion.sh; other_pid=$SPAWNED_PID
   spawn_fake_daemon "$sd/mine" stall-reporter.sh >/dev/null
   [ -n "$mine_pid" ] && [ -n "$other_pid" ] || { fail "scoped_companion_death: 가짜 감시 프로세스를 못 띄움"; return; }
   # 내 판 것만 되돌린다. 다른 판 것은 그대로 살려 둔다.
@@ -238,7 +247,7 @@ test_path_prefix_collision() {
   sd=$(new_state); setup_board "$sd"
   # 내 판에는 companion 을 아예 띄우지 않는다. 신고기만 띄워 신고기 판정과 섞이지 않게 한다.
   spawn_fake_daemon "$sd/mine" stall-reporter.sh >/dev/null
-  shadow_pid=$(spawn_fake_daemon "$sd/mine-shadow" conductor-companion.sh)
+  spawn_fake_daemon "$sd/mine-shadow" conductor-companion.sh; shadow_pid=$SPAWNED_PID
   [ -n "$shadow_pid" ] || { fail "path_prefix_collision: 가짜 감시 프로세스를 못 띄움"; return; }
   run_waker_once "$sd"
   comp=$(count_matches 'companion 0' "$sd/sends.log")
@@ -274,7 +283,7 @@ test_path_suffix_collision() {
   sd=$(new_state); setup_board "$sd"
   nested="$sd/deep$sd/mine"
   spawn_fake_daemon "$sd/mine" stall-reporter.sh >/dev/null
-  nested_pid=$(spawn_fake_daemon "$nested" conductor-companion.sh)
+  spawn_fake_daemon "$nested" conductor-companion.sh; nested_pid=$SPAWNED_PID
   [ -n "$nested_pid" ] || { fail "path_suffix_collision: 가짜 감시 프로세스를 못 띄움"; return; }
   run_waker_once "$sd"
   comp=$(count_matches 'companion 0' "$sd/sends.log")
@@ -302,7 +311,7 @@ test_alive_companion_not_reported_dead() {
 test_survives_companion_death() {
   local sd pid comp_pid before after waited
   sd=$(new_state); setup_board "$sd"
-  comp_pid=$(spawn_fake_daemon "$sd/mine" conductor-companion.sh)
+  spawn_fake_daemon "$sd/mine" conductor-companion.sh; comp_pid=$SPAWNED_PID
   [ -n "$comp_pid" ] || { fail "survives_companion_death: 가짜 companion 을 못 띄움"; return; }
   FAKE_ORCA_STATE_DIR="$sd" ORCA_BIN="$FIXTURE" \
     "$WAKER" --board "$(board_of "$sd")" --supervisor term_supervisor --run run_project \
@@ -337,7 +346,7 @@ test_survives_companion_death() {
 test_stale_code_detected() {
   local sd pid stale
   sd=$(new_state); setup_board "$sd"
-  pid=$(spawn_fake_daemon "$sd/mine" conductor-companion.sh)
+  spawn_fake_daemon "$sd/mine" conductor-companion.sh; pid=$SPAWNED_PID
   spawn_fake_daemon "$sd/mine" stall-reporter.sh >/dev/null
   [ -n "$pid" ] || { fail "stale_code_detected: 가짜 companion 을 못 띄움"; return; }
   # 도는 프로세스보다 파일이 더 새것이 되게 만든다 = 낡은 코드로 돌고 있다.
@@ -502,7 +511,7 @@ test_regex_metachar_board_isolation() {
 test_locale_independent() {
   local sd pid stale comp
   sd=$(new_state); setup_board "$sd"
-  pid=$(spawn_fake_daemon "$sd/mine" conductor-companion.sh)
+  spawn_fake_daemon "$sd/mine" conductor-companion.sh; pid=$SPAWNED_PID
   spawn_fake_daemon "$sd/mine" stall-reporter.sh >/dev/null
   [ -n "$pid" ] || { fail "locale_independent: 가짜 companion 을 못 띄움"; return; }
   touch "$sd/mine/v3/conductor-companion.sh"; sleep 1; touch "$sd/mine/v3/conductor-companion.sh"
