@@ -105,8 +105,14 @@ mechanics.md의 `ORCA_BIN=<명시 override 또는 PATH 자동 탐색>` 표현이
 > ```
 > skills/orca-conductor/scripts/routing-ledger-append.sh card_outcome <판이름> <taskId> \
 >   '{"role":"developer|reviewer|researcher","runner":"codex|omo|claude","provider":"...","model":"...","effort":"...",
->     "verdict":"CODE_PASS|CODE_FAIL|무효|측정못함","review_rounds":N,"critical":N,"important":N,"minor":N,"duration_min":N}'
+>     "verdict":"CODE_PASS|CODE_FAIL|무효|측정못함","review_rounds":N,"critical":N,"important":N,"minor":N,
+>     "counterpart_task":"task_...","round":N}'
 > ```
+>
+> `counterpart_task` = 짝 카드 id (구현 카드면 그 검수 카드, 검수 카드면 검수 대상 구현 카드. 없으면 null).
+> `round` = 그 결함 계열의 왕복 회차 (F-X가 1, R-X도 1, F-X-2·R-F-X면 2 …). 이 두 칸이 있어야
+> 나중에 "이 카드에서 어떤 작업자와 어떤 검수자가 몇 번 티키타카했는지"를 데이터로 재구성할 수 있다
+> (2026-08-11 kyle 질문 — 짝과 회차가 카드 이름 규칙에만 있고 데이터에 없었다).
 >
 > 시간은 두 값이다 — `duration_total_min`(발령부터 정산까지, 대기·중단 포함)과 `duration_work_min`(실작업).
 > **실작업은 체감이나 역산이 아니라 러너 세션 기록으로 실측한다**: omo는 `~/.senpi/agent/sessions/<워크트리>/`
