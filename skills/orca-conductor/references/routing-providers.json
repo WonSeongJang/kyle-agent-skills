@@ -22,7 +22,7 @@
       "family": "kimi",
       "quotaKey": "kimi",
       "enabled": true,
-      "weeklyReservePercent": 10,
+      "weeklyReservePercent": 30,
       "models": [
         {
           "id": "kimi/k3[1m]",
@@ -544,5 +544,10 @@
       "시간 기준선": "이 판 첫 기준선이다. 153.6초=0개 / 314.1초=1개 / 597초=2개. 앞으로 '몇 초면 빠른가'는 이 표와 견준다.",
       "원본": "/Users/fw_m1/Dev/conductor-core/.staging/result-EXP-RI-1.md"
     }
+  },
+  "_정책_20260811": {
+    "확정": "2026-08-11 kyle",
+    "내용": "구현·무거운 작업의 기본은 zai/glm-5.2 max다. zai는 5시간 리셋뿐이라 주간 고갈이 없다(실측: 5시간 사용 1%). kimi는 주간이 얇으므로(2026-08-10 실사고: 한 건에 95→99%) 보존한다 — 가벼운 research 계열에만 쓴다.",
+    "적용": "kimi weeklyReservePercent 10→30 상향. glm 점수·가산점은 건드리지 않음(이미 glm이 구현 계열 최고 품질 90)."
   }
 }
