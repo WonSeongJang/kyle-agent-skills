@@ -47,6 +47,10 @@ orca terminal wait --terminal <handle> --for tui-idle --timeout-ms 90000 --json
 
 ## 2) 배분과 대기
 
+**교차 Run 전송은 `--from` + `--to`만 쓴다 (2026-08-11 실측 — omo-deep-analysis-1 감독 재현)**: `send`에 수신자 `--to run:<다른 판>`과 발신 판 `--run <자기 판>`을 병용하면 조회 범위가 발신 판으로 제한돼 `run_not_found`로 거절된다(runtimeId 동일·run-show 성공 상태에서 재현). 같은 명령에서 `--run`만 제거하면 성공한다.
+
+
+
 ```bash
 orca orchestration task-create --spec "<섹션·범위·금지사항 포함 명세>" --json
 ~/.claude/skills/orca-conductor/scripts/dispatch-safe.sh <taskId> <일꾼handle> <명패handle>
