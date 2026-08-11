@@ -392,7 +392,119 @@ def collect(orca: str) -> dict:
                 }
             )
         out["terminals"].sort(key=lambda t: (t["role"] == "", t["title"]))
+    diagnose(out)
     return out
+
+
+# ── 자동 판정 ──────────────────────────────────────────────────────────────
+# 판별 규칙을 서버 한 곳에 둔다 — 화면(판 페이지)과 슈퍼감독 감시가 같은 판정을
+# 읽는다 (2026-08-11 kyle: "이슈를 자동으로 판정해 주면 일일이 안 물어봐도 된다").
+# 문턱은 발명하지 않는다: 묵은 편지 600/1200초(중계기 일기와 동일), 중계기
+# warn/dead, 무진행은 중계기 자신의 판정(no_progress_cycles, 정체 기준 2회),
+# Context 는 CONTEXT_WARN. 근거 없는 숫자로 새 관문을 만들지 않는다.
+DIAG_MAIL_WARN_SEC = 600
+DIAG_MAIL_DEAD_SEC = 1200
+
+
+def _age_sec(iso: str | None) -> float | None:
+    if not iso:
+        return None
+    try:
+        t = time.mktime(time.strptime(iso[:19].replace("T", " "), "%Y-%m-%d %H:%M:%S"))
+    except ValueError:
+        return None
+    # 원장 시각은 UTC 다 — 로컬 시각과의 차로 나이를 구한다.
+    return max(0.0, time.time() - (t - time.timezone))
+
+
+def diagnose(out: dict) -> None:
+    msgs = out.get("messages")
+    for board in out["boards"]:
+        diag: list[dict] = []
+        run_id = board.get("run_id")
+
+        if msgs is not None:
+            untouched = [
+                (m, _age_sec(m.get("created_at")))
+                for m in msgs
+                if m.get("run_id") == run_id and not m.get("read")
+            ]
+            stale = [(m, a) for m, a in untouched if a and a > DIAG_MAIL_WARN_SEC]
+            # 받는이에 따라 뜻이 다르다: 감독 앞(run:)이 묵으면 배달 사슬(companion) 고장
+            # 신호, 개별 명패 앞이 묵으면 그 수신자(중계기·작업자)의 소비 문제거나 은퇴 명패다.
+            sup_stale = [(m, a) for m, a in stale if str(m.get("to_handle") or "").startswith("run:")]
+            etc_stale = [(m, a) for m, a in stale if not str(m.get("to_handle") or "").startswith("run:")]
+            if sup_stale:
+                worst = max(a for _, a in sup_stale)
+                diag.append({
+                    "level": "bad" if worst > DIAG_MAIL_DEAD_SEC else "warn",
+                    "text": f"감독 앞 편지 {len(sup_stale)}통을 아무도 안 집음 — 가장 오래 "
+                            f"{int(worst // 60)}분. companion·감독 기상 사슬 점검",
+                })
+            if etc_stale:
+                worst = max(a for _, a in etc_stale)
+                diag.append({
+                    "level": "warn",
+                    "text": f"중계기·작업자 명패 앞 편지 {len(etc_stale)}통 미수령 — 가장 오래 "
+                            f"{int(worst // 60)}분. 수신자 소비 루프 또는 은퇴 명패 확인",
+                })
+
+        gates = board.get("gates")
+        if gates:
+            pend = [g for g in gates if (g.get("status") or "pending") == "pending"]
+            for g in pend:
+                age = _age_sec(g.get("created_at"))
+                mins = f" {int(age // 60)}분째" if age else ""
+                has_letter = msgs is not None and any(
+                    m.get("run_id") == run_id and m.get("type") == "decision_gate"
+                    for m in msgs
+                )
+                txt = f"결정 관문 pending{mins}"
+                if not has_letter:
+                    txt += " — 동반 편지가 최근 우편함에 안 보임: 고아 관문 의심 (2026-08-05 실사고)"
+                diag.append({"level": "bad", "text": txt})
+
+        relay = board.get("relay")
+        if relay and relay.get("age_sec") is not None:
+            age = relay["age_sec"]
+            if age > relay.get("dead_sec", bs.RELAY_DEAD_SEC):
+                diag.append({"level": "bad",
+                             "text": f"중계기 일기 {relay.get('age_text', '?')} 정지 — 재가동이 먼저"})
+            elif age > relay.get("warn_sec", bs.RELAY_WARN_SEC):
+                diag.append({"level": "warn",
+                             "text": f"중계기 일기 {relay.get('age_text', '?')} 침묵 — 다음 주기 확인"})
+            tail = relay.get("tail") or ""
+            if isinstance(tail, list):
+                tail = "\n".join(map(str, tail))
+            m = re.search(r"no_progress_cycles=(\d+)", tail)
+            if m and int(m.group(1)) >= 2:
+                diag.append({"level": "warn",
+                             "text": f"중계기 판정: 무진행 {m.group(1)}회 연속 (중계기 정체 기준 2회)"})
+
+        # 슈퍼 판은 companion 대신 슈퍼감독 세션의 Monitor 가 깨운다 — 규칙 제외.
+        if not board.get("companions") and "super" not in (board.get("name") or "").lower():
+            diag.append({"level": "bad",
+                         "text": "companion 0개 — 편지가 와도 감독이 안 깨어난다. 감독 pane 재기동 필요"})
+
+        cards = board.get("cards")
+        if cards is not None:
+            if cards.get("failed"):
+                diag.append({"level": "warn",
+                             "text": f"실패 카드 {cards['failed']}장 — 분류·재발령 대기인지 확인"})
+            if (cards.get("ready") or 0) > 0 and not cards.get("dispatched"):
+                diag.append({"level": "warn",
+                             "text": "대기 카드만 있고 도는 카드 0장 — 대기열 정체 의심 (대기열은 비우지 않는다)"})
+
+        ctx = board.get("context_pct")
+        if ctx is not None and ctx >= bs.CONTEXT_WARN:
+            if board.get("autocompacts"):
+                diag.append({"level": "info",
+                             "text": f"감독 Context {ctx}% — gpt 계열, 자동 압축 대상. 추이만 2회 관측"})
+            else:
+                diag.append({"level": "warn",
+                             "text": f"감독 Context {ctx}% — 교대 검토 (경계 {bs.CONTEXT_WARN}%)"})
+
+        board["diag"] = diag
 
 
 # Orca 오케스트레이션 원장 (SQLite). 읽기 전용(mode=ro)으로만 연다 — 쓰기 불가.
@@ -946,6 +1058,22 @@ function pageBoard(main, runId) {
     tiles.appendChild(tile("완료", b.cards.completed || 0));
   }
   main.appendChild(tiles);
+
+  // 자동 판정 — 서버가 낸 판정을 그대로 보여준다 (규칙 원본은 서버 diagnose()).
+  if (b.diag && b.diag.length) {
+    const dcard = el("div", "card");
+    dcard.appendChild(el("h3", null, "자동 판정"));
+    for (const d of b.diag) {
+      const cls = d.level === "bad" ? "bad" : d.level === "warn" ? "warn" : "dim";
+      dcard.appendChild(el("div", "row " + cls,
+        (d.level === "bad" ? "● " : d.level === "warn" ? "▲ " : "· ") + d.text));
+    }
+    main.appendChild(dcard);
+  } else if (b.diag) {
+    const ok = el("div", "card");
+    ok.appendChild(el("div", "dim", "자동 판정: 걸리는 항목 없음"));
+    main.appendChild(ok);
+  }
 
   const gates = b.gates || [];
   const pending = gates.filter((g) => (g.status || "pending") === "pending");
