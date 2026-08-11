@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 import time
@@ -34,8 +35,12 @@ JUDGE_MODEL = "deepseek/deepseek-v4-flash"
 TOOL_MARKERS = ("• Ran", "• Explored", "• Edited", "• Read", "• Search")
 # 프록시 계열 오류 — 중계기가 직접 복구한다 (mechanics.md 중계기 절 프록시 자가 복구)
 PROXY_ERRORS = ("stream disconnected", "127.0.0.1:10100", "426 Upgrade Required")
-# 연속 무진행 몇 회에서 정체로 보는가 (5분 간격 2회 = 약 10분)
-STALL_CYCLES = 2
+# worker dispatch 가 "정체(stale)"로 보는 한계 (초). coordinator.ts:75
+# HUNG_THRESHOLD_MS = 10*60*1000 의 사본이다 — "10분 = 심박 5분 × 2, 심박 1회 누락이
+# 정체로 보이는 최소 시간" (2026-08-12 소스 주석 실측). 감독 화면 주기가 아니라 worker
+# dispatch 의 권위 심박 시각으로 잰다 — 감독이 worker_done 을 기다리며 조용히 자는
+# 것을 정체로 오판한 사건(msg_b07782b049cf)이 바로 화면 주기 판정이었다.
+DISPATCH_STALE_SEC = 10 * 60
 # 판 수명 동안 계속 dispatched 로 남는 상주 역할 카드의 이름.
 # 이 카드들은 "지금 누가 일하고 있다"가 아니라 "이 장치가 살아 있다"를 뜻하므로
 # 일반 작업 수에 세지 않는다 (2026-08-12 실측: 일반 0장인데 RELAY-MONITOR 한 장
@@ -48,6 +53,19 @@ RESIDENT_CARD_TITLES = ("RELAY-MONITOR",)
 KNOWN_TASK_STATUSES = frozenset(
     {"pending", "ready", "dispatched", "completed", "failed", "blocked"}
 )
+# 번들이 dispatch_contexts.status 에 실제로 허용하는 값 (dispatch-show 의 result.dispatch.status).
+# 운영 DB DispatchStatus union 과 같다 (2026-08-12 소스 src/main/runtime/orchestration/types.ts:21 실측).
+# 이 목록 밖 값이 오면 응답을 이해하지 못한 것이므로 '모름'으로 닫는다.
+KNOWN_DISPATCH_STATUSES = frozenset(
+    {"pending", "dispatched", "completed", "failed", "circuit_broken"}
+)
+# worker_done 대기가 끝난 종료 상태 (중요 3: done 은 이 3개만). pending 은 여기 없다 —
+# pending 을 완료로 꾸미면 거짓 정상 대기가 된다 (검수 중요 4).
+DONE_DISPATCH_STATUSES = frozenset({"completed", "failed", "circuit_broken"})
+# 권위 식별자 형식 (companion record_worker_done_ledger / 소스 getDispatchContext 실측).
+# 위조 ID·불일치 보고를 여기서 거른다 (목표 5).
+DISPATCH_ID_RE = re.compile(r"^ctx_[0-9a-f]{8,}$")
+TASK_ID_RE = re.compile(r"^task_[0-9a-f]{8,}$")
 # 중계기 자신의 명부 역할. 정체 상신의 발신 자리로 쓴다.
 RELAY_ROLE = "relay"
 
@@ -149,10 +167,33 @@ def append_log(path: Path, line: str) -> None:
 
 
 def parse_context_pct(text: str) -> int | None:
-    import re
-
     matches = re.findall(r"Context (\d+)% used", text or "")
     return int(matches[-1]) if matches else None
+
+
+def _now_utc() -> datetime:
+    """현재 UTC 시각. 시험이 고정 시계로 바꿀 수 있게 한 곳에서 뽑는다."""
+    return datetime.now(timezone.utc)
+
+
+def parse_iso(value: object) -> datetime | None:
+    """ISO-8601 시각 문자열을 aware datetime 으로. 못 파싱하면 None (모름).
+
+    끝이 'Z' 여도 받는다(Python 3.14 fromisoformat 은 'Z' 를 받지만 구 실행환경도
+    안전하게 'Z' → '+00:00' 로 바꾼다). 시간대가 없으면 UTC 로 본다.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 def count_tool_lines(lines: list[str]) -> int:
@@ -176,18 +217,28 @@ def is_resident_card(task: dict) -> bool:
     )
 
 
-def count_dispatched(run: str) -> tuple[int, int] | None:
-    """(일반 작업 카드 수, 상주 카드 수). 못 읽으면 None 이며 0 으로 뭉개지 않는다.
+def _parse_task_list(run: str) -> dict | None:
+    """task-list 를 파싱해 활성 카드 목록과 상주 카드 수를 돌려준다.
 
-    상주 카드는 "일하는 사람"이 아니라 "살아 있는 장치"다. 둘을 한 숫자로 합치면
-    일반 작업이 0장인 조용한 감독이 정체로 보인다 — 2026-08-12 오탐이 정확히 그것이다.
-    그래서 합치지 않고 둘 다 돌려주고, 일기에도 둘 다 적는다.
+    못 읽거나 모양이 어긋나면 None 이며 0 으로 뭉개지 않는다. count_dispatched 와
+    dispatch 건강도 판정이 같은 파싱을 공유한다 — 둘이 따로 읽으면 한쪽만 고쳐져 어긋난다.
 
-    응답 모양은 믿지 않고 껍질부터 하나씩 확인한다 — result 객체, tasks 목록, 각 행이
-    객체인지, status 가 번들이 실제로 쓰는 값인지. 하나라도 어긋나면 그 자리에서 None
-    이다. 검사 없이 `task.get(...)` 을 부르면 `tasks=[None, 정상카드]` 하나에 순찰
-    주기가 예외로 끊기고, 모르는 status 는 조용히 (0, 0) 이 되어 거짓 유휴가 된다.
-    둘 다 정체를 숨기는 쪽으로 틀리므로 모름으로 닫는 것이 유일하게 안전한 기본값이다.
+    상주 카드(RELAY-MONITOR)는 "일하는 사람"이 아니라 "살아 있는 장치"다. 활성
+    카드 수에서 빼고 따로 센다 — 같은 숫자로 합치면 일반 작업이 0장인 조용한 감독이
+    정체로 보인다 (2026-08-12 오탐).
+
+    권위 교차검증 (F-RELAY-STRUCTURED-STALL-2 중요 1·3): task-list 의 result.runId 가
+    요청 run 과 정확히 같을 때만 쓴다. 다르면 외국 판의 카드를 현재 판의 정체로 보고하는
+    권위 결합 오류가 난다 (검수 중요 3 실측). 활성 카드마다 taskId·dispatch_id·
+    assignee_handle 을 보존해 dispatch-show 와 교차검증에 쓴다. 공개 CLI 계약(2026-08-13
+    소스 src/cli/handlers/orchestration.ts:827-840, rpc/methods/orchestration.ts:1474-1484
+    실측): dispatched 카드는 assignee_handle·dispatch_id 를 함께 준다. 둘 중 하나라도
+    비어있거나 문자열이 아니면 그 응답을 이해하지 못한 것이므로 None 으로 닫는다.
+
+    응답 모양은 믿지 않고 껍질부터 하나씩 확인한다. 검사 없이 task.get(...) 을 부르면
+    tasks=[None, 정상카드] 하나에 순찰 주기가 예외로 끊기고, 모르는 status 는 조용히
+    (0, 0) 이 되어 거짓 유휴가 된다. 둘 다 정체를 숨기는 쪽으로 틀리므로 모름으로 닫는
+    것이 유일하게 안전한 기본값이다.
     """
     data = orca(["orchestration", "task-list", "--run", run])
     if not data or not data.get("ok"):
@@ -195,11 +246,15 @@ def count_dispatched(run: str) -> tuple[int, int] | None:
     result = data.get("result")
     if not isinstance(result, dict):
         return None
+    # result.runId 는 번들이 해석한 실제 run 이다. 요청 run 과 다르면 외국 판이다.
+    resp_run = result.get("runId")
+    if not isinstance(resp_run, str) or resp_run != run:
+        return None
     tasks = result.get("tasks")
     # 성공 응답은 항상 tasks 배열을 준다(빈 판이면 빈 배열). 목록이 아니면 모르는 모양이다.
     if not isinstance(tasks, list):
         return None
-    active = 0
+    active: list[dict] = []
     resident = 0
     for task in tasks:
         if not isinstance(task, dict):
@@ -207,7 +262,7 @@ def count_dispatched(run: str) -> tuple[int, int] | None:
         status = task.get("status")
         # 자료형부터 본다. `in frozenset` 은 해시할 수 없는 값에서 비교 자체가
         # TypeError 라, status=[] · {} · ["dispatched"] 하나에 순찰 주기가 통째로
-        # 예외로 끊긴다 — 정체 횟수도 안 쌓이고 상신도 0통이 된다 (2026-08-12 재검수 실측).
+        # 예외로 끊긴다 — 정체 횟수도 안 쌓이고 상신도 0통이 된다 (재검수 실측).
         # 모르는 자료형은 모르는 값과 똑같이 '모름'으로 닫는다.
         if not isinstance(status, str) or status not in KNOWN_TASK_STATUSES:
             return None
@@ -215,11 +270,138 @@ def count_dispatched(run: str) -> tuple[int, int] | None:
             continue
         if is_resident_card(task):
             resident += 1
-        else:
-            active += 1
-    return active, resident
+            continue
+        tid = task.get("id")
+        dispatch_id = task.get("dispatch_id")
+        assignee = task.get("assignee_handle")
+        # 활성(dispatched) 카드는 권위 3값이 모두 비어있지 않은 문자열이어야 한다.
+        # 하나라도 누락·빈값·비문자열이면 응답을 이해하지 못한 것이므로 None 으로 닫는다.
+        # tid 는 권위 형식(TASK_ID_RE)까지 본다 (F-RELAY-STRUCTURED-STALL-3): 위조 ID 가
+        # task-list 와 dispatch-show 양쪽에 같으면 둘이 일치한다는 이유만으로 보고가 나가던
+        # 구멍을 닫는다. dispatch_id 는 classify_dispatch 의 DISPATCH_ID_RE 가 잡는다.
+        if not (isinstance(tid, str) and tid and TASK_ID_RE.fullmatch(tid)):
+            return None
+        if not (isinstance(dispatch_id, str) and dispatch_id):
+            return None
+        if not (isinstance(assignee, str) and assignee):
+            return None
+        active.append({"task_id": tid, "dispatch_id": dispatch_id, "assignee_handle": assignee})
+    return {"active": active, "resident": resident}
 
 
+def count_dispatched(run: str) -> tuple[int, int] | None:
+    """(일반 작업 카드 수, 상주 카드 수). 못 읽으면 None 이며 0 으로 뭉개지 않는다.
+
+    _parse_task_list 의 얇은 포장이다 — 같은 파싱을 dispatch 건강도 판정과 공유한다.
+    """
+    parsed = _parse_task_list(run)
+    if parsed is None:
+        return None
+    return len(parsed["active"]), parsed["resident"]
+
+
+def classify_dispatch(
+    task_id: str,
+    now_dt: datetime,
+    *,
+    expected_dispatch_id: str | None = None,
+    expected_assignee: str | None = None,
+    expected_run: str | None = None,
+) -> dict | None:
+    """한 활성 카드의 dispatch 를 dispatch-show 로 healthy/stale/done 으로 가른다.
+
+    시그니처는 (task_id, now_dt) positional + expected_* keyword-only 다. expected_*
+    를 주지 않은 직접 호출(경계 단위 시험)은 교차검증 없이 형식·task_id·stale 경계만
+    검사한다. patrol() 은 _parse_task_list 의 card 와 요청 run 을 expected_* 로 넘겨
+    4필드 교차검증을 켠다 (F-RELAY-STRUCTURED-STALL-2 중요 1·2·3).
+
+    권위 교차검증 (expected_* 제공 시): dispatch-show 의 id/task_id/run_id/assignee_handle
+    을 expected_dispatch_id/expected_run/task_id/expected_assignee 와 모두 비교한다.
+    하나라도 누락·빈값·불일치면 None (모름) 이며 보고 0 이다. 외국 dispatch 를 현재 판의
+    정체로 보고하거나 서로 다른 작업자를 결합하는 권위 오결합을 여기서 막는다.
+
+    상태 분류 (중요 3·4): dispatched 만 healthy/stale. done 은 completed/failed/
+    circuit_broken 만. pending 은 모름으로 닫는다.
+
+    assignee_pane_key 는 비교하지 않는다. 공개 task-list 계약(orchestration.ts:827-840)은
+    assignee_handle 은 주지만 pane 은 주지 않으므로 교차검증할 기댓값이 없다. handle 은
+    run 안에서 작업자 터미널을 유일하게 식별하므로 권위 비교에 충분하다.
+
+    stale 경계 (중요 5): coordinator.ts getStaleDispatches 의 권위 SQL
+    `julianday(dispatched_at) < threshold` 를 따른다 — 정확히 10분은 stale 가 아니고
+    10분 초과만 stale 다. 따라서 `>= threshold` 로 비교한다 (X1 변형 `>` 거부).
+
+    반환: {"state": "healthy"|"stale"|"done", "dispatch_id": str, "status": str}.
+    못 읽거나 교차검증이 어긋나면 None (모름) — 정상·정체 어느 쪽으로도 추측하지 않는다.
+    """
+    data = orca(["orchestration", "dispatch-show", "--task", task_id])
+    if not data or not data.get("ok"):
+        return None
+    result = data.get("result")
+    if not isinstance(result, dict):
+        return None
+    dispatch = result.get("dispatch")
+    # dispatch 가 null 이면 발령 기록이 없다 — 정상 추측 금지, 모름.
+    if not isinstance(dispatch, dict):
+        return None
+    did = dispatch.get("id")
+    dtid = dispatch.get("task_id")
+    drun = dispatch.get("run_id")
+    dassn = dispatch.get("assignee_handle")
+    # 형식·task_id 일치는 항상 검사 (직접 호출·patrol 공통).
+    # F-RELAY-STRUCTURED-STALL-3: TASK_ID_RE 로 권위 형식을 본다. dtid 와 task_id 가
+    # 서로 같기만 하고 형식이 위조면 자기 일치 보고가 나가므로 둘 각각 fullmatch 한다.
+    if not (isinstance(did, str) and did and DISPATCH_ID_RE.fullmatch(did)):
+        return None
+    if not (isinstance(dtid, str) and dtid and TASK_ID_RE.fullmatch(dtid)):
+        return None
+    if not (isinstance(task_id, str) and task_id and TASK_ID_RE.fullmatch(task_id)):
+        return None
+    if dtid != task_id:
+        return None
+    # 권위 교차검증: patrol 이 expected_* 를 넘긴 경우에만 켠다 (4필드 모두).
+    if expected_dispatch_id is not None:
+        if did != expected_dispatch_id:
+            return None
+    if expected_run is not None:
+        if not (isinstance(drun, str) and drun and drun == expected_run):
+            return None
+    if expected_assignee is not None:
+        if not (isinstance(dassn, str) and dassn and dassn == expected_assignee):
+            return None
+    status = dispatch.get("status")
+    if not isinstance(status, str) or status not in KNOWN_DISPATCH_STATUSES:
+        return None
+    # 상태 분류: dispatched 만 건강/정체. done 은 종료 3상태만. pending 은 모름.
+    if status not in ("dispatched",):
+        if status in DONE_DISPATCH_STATUSES:
+            return {"state": "done", "dispatch_id": did, "status": status}
+        # pending 등 알 수 없는 상태 — 정상으로 꾸미지 않고 모름으로 닫는다.
+        return None
+    # 정체 판정: coordinator getStaleDispatches 와 같은 세 조건.
+    raw_dispatched = dispatch.get("dispatched_at")
+    raw_heartbeat = dispatch.get("last_heartbeat_at")
+    # dispatched_at 이 null/불파싱이면 권위 판정을 못 한다 — 모름.
+    dispatched_at = parse_iso(raw_dispatched)
+    if dispatched_at is None:
+        return None
+    # heartbeat: null 은 "심박 없음"(정상 상태). 비-문자열/불파싱 문자열은 malformed → 모름.
+    if raw_heartbeat is None:
+        heartbeat_at = None
+    elif isinstance(raw_heartbeat, str):
+        heartbeat_at = parse_iso(raw_heartbeat)
+        if heartbeat_at is None:
+            return None
+    else:
+        return None
+    threshold = now_dt.timestamp() - DISPATCH_STALE_SEC
+    # 정확히 임계(10분)는 stale 가 아니다 — `>=` 비교 (X1 변형 `>` 거부, 중요 5).
+    if dispatched_at.timestamp() >= threshold:
+        # 첫 심박 유예: 발령 직후엔 심박이 아직 없어도 정체가 아니다.
+        return {"state": "healthy", "dispatch_id": did, "status": status}
+    if heartbeat_at is not None and heartbeat_at.timestamp() >= threshold:
+        return {"state": "healthy", "dispatch_id": did, "status": status}
+    return {"state": "stale", "dispatch_id": did, "status": status}
 def error_code(result: dict | None) -> str:
     """실패 원문에서 코드만 뽑는다. 원인 없는 '실패'는 다음 사람이 못 고친다."""
     if result is None:
@@ -282,24 +464,72 @@ def patrol(project: str, board: str, run: str, log_path: Path, state_path: Path)
         verdict, judge_note = ask_judge(tail_text[-3000:])
         basis = f"애매(새 줄 {returned}, 도구 줄 {tool_lines}) → 모델 판정"
 
-    # --- 유휴와 정체를 가른다 (2026-08-10 오탐 실측) ---
-    # 도는 일반 작업이 0개면 감독이 조용한 것은 정상이다. 옛 luna 중계기는 이 구분이 없어
-    # 정당한 유휴를 "no_progress_cycles=16" 으로 쌓아 거짓 정체를 신고했다.
-    # 2026-08-12: 상주 카드(RELAY-MONITOR)를 같이 세어 같은 오탐이 다시 났다.
-    # 못 읽었으면(None) 0 으로 뭉개지 않고 정체 판정을 그대로 둔다 — fail-closed.
-    counts = count_dispatched(run)
-    active, resident = counts if counts is not None else (None, 0)
-    if verdict == "정체" and active == 0:
-        verdict, basis = (
-            "유휴",
-            f"{basis} — 다만 도는 일반 카드 0개(상주 {resident}장 제외)라 조용한 것이 정상이다",
-        )
+    # --- 활성 카드와 dispatch 건강도 (목표 1·3·4, 사건 msg_b07782b049cf) ---
+    #
+    # 감독 화면 무출력만으로 정체로 보면 오탐이다 — 감독은 worker_done 을 기다리며
+    # 조용히 자는 것이 정상이다 (mechanics.md "감독의 대기 방식: 발령 뒤에는 턴을 끝내고
+    # 잔다"). 그래서 활성 카드가 있다면 각 dispatch 의 상태·심박을 직접 보고, 어느
+    # worker 가 진짜 멈췄는지를 권위 식별자(taskId+dispatchId)로 가린다. 활성 카드가
+    # 없으면(상주만 또는 빈 판) 조용한 감독은 유휴다.
+    parsed = _parse_task_list(run)
+    if parsed is None:
+        active_cards: list[dict] | None = None
+        resident = 0
+    else:
+        active_cards = parsed["active"]
+        resident = parsed["resident"]
 
-    # --- 연속 무진행 세기 ---
+    now_dt = _now_utc()
+    healthy = stale = done = unknown = 0
+    # 교차검증을 통과한 stale 만 (card, dispatch_id) 로 모은다. card 에 권위 4값이 모두
+    # 들어 있어 보고 결합이 외국 dispatch 와 섞이지 않는다.
+    stale_targets: list[tuple[dict, str]] = []
+    if active_cards is not None:
+        for card in active_cards:
+            cls = classify_dispatch(
+                card["task_id"], now_dt,
+                expected_dispatch_id=card["dispatch_id"],
+                expected_assignee=card["assignee_handle"],
+                expected_run=run,
+            )
+            if cls is None:
+                unknown += 1
+            elif cls["state"] == "healthy":
+                healthy += 1
+            elif cls["state"] == "done":
+                done += 1
+            else:  # stale
+                stale += 1
+                stale_targets.append((card, cls["dispatch_id"]))
+
+    # --- 감독 화면 정체를 dispatch 건강도로 다시 가른다 ---
+    #
+    # 활성 worker 가 건강하거나 이미 끝났으면 감독이 조용한 것은 worker_done 대기(정상)다.
+    # dispatch 가 stale 이면 그 worker 가 진짜 멈춘 것이므로 정체로 둔다. dispatch 상태를
+    # 못 읽었으면(모름) 정상·정체 어느 쪽으로도 추측하지 않는다 (목표 4·6: 거짓 정상 0).
+    if verdict == "정체":
+        if active_cards is None:
+            verdict, basis = "모름", f"{basis} — 카드 목록을 못 읽어 정상·정체 추측 불가"
+        elif len(active_cards) == 0:
+            verdict, basis = (
+                "유휴",
+                f"{basis} — 도는 일반 카드 0개(상주 {resident}장 제외)라 조용함이 정상이다",
+            )
+        elif stale > 0:
+            verdict, basis = "정체", f"{basis} — worker dispatch 정체(stale {stale})"
+        elif healthy > 0 or done > 0:
+            verdict, basis = (
+                "정상 대기",
+                f"{basis} — 활성 worker 심박 정상(건강 {healthy}·완료 {done})이라 "
+                f"감독 조용함은 worker_done 대기다",
+            )
+        else:
+            verdict, basis = "모름", f"{basis} — dispatch 상태를 못 읽어 추측 불가(모름 {unknown})"
+
+    # --- 감독 화면 연속 무진행(진단용 카운터) ---
     cycles = int(state.get("no_progress_cycles", 0))
-    if verdict in ("진행", "유휴"):
+    if verdict in ("진행", "유휴", "정상 대기"):
         cycles = 0
-        state.pop("stall_escalation_id", None)
     else:
         # '모름'도 진행으로 세지 않는다 — 모름을 정상으로 뭉개지 않기 위해서다.
         cycles += 1
@@ -307,42 +537,67 @@ def patrol(project: str, board: str, run: str, log_path: Path, state_path: Path)
     # --- 프록시 자가 복구 ---
     proxy_action = recover_proxy(tail_text)
 
-    # --- 정체 보고: 같은 정체에 대해 딱 한 번 ---
+    # --- 정체 보고: 권위 taskId+dispatchId 를 가진 stale dispatch 에 대해 각각 1회 ---
     #
-    # 발신 자리(--from)를 반드시 붙인다. 이 순찰기는 launchd 가 띄운 PPID=1 데몬이라
-    # ORCA_TERMINAL_HANDLE 도, 붙어 있는 터미널도 없다. --from 없이 부르면 번들 CLI 가
-    # 발신자를 정하지 못해 `no_active_sender_terminal` 로 거절하고, 우편은 한 통도
-    # 나가지 않는다 — 2026-08-12 정체 상신 8회 연속 실패의 원인이 정확히 이것이다.
-    # 발신 자리는 중계기 자신의 명부 역할에서 행동 직전에 다시 찾는다.
+    # 감독 화면 주기가 아니라 worker dispatch 의 권위 심박 시각이 보고의 방아쇠다.
+    # 그래야 건강한 worker 를 기다리는 조용한 감독이 정체로 오판되지 않는다 (목표 1).
+    # 보고는 --task-id/--dispatch-id 구조화 필드에 실어 식별자 없는 MALFORMED_LIFECYCLE_REPORT
+    # 격리를 막는다 (목표 2). 같은 stale dispatch 에 대해 딱 한 번이고, dispatch 가
+    # stale 를 벗어나면 기록을 지워 다음 정체 때 다시 보고한다 (목표 5).
+    #
+    # 발신 자리(--from)를 반드시 붙인다 — 이 순찰기는 launchd PPID=1 데몬이라 붙은
+    # 터미널이 없어 --from 없으면 no_active_sender_terminal 로 거절된다 (2026-08-12 실측).
+    escalations = dict(state.get("dispatch_escalations") or {})
+    stale_dispatch_ids = {did for _, did in stale_targets}
     action = proxy_action or "없음"
-    if cycles >= STALL_CYCLES and not state.get("stall_escalation_id"):
+    sent_notes: list[str] = []
+    if stale_targets:
         relay = resolve_role(project, board, run, RELAY_ROLE)
-        if relay is None:
-            # 발신 자리를 모르면 보내지 않는다. 성공으로 적지 않으므로 다음 순찰에 다시 온다.
-            action = f"escalation 보류 — 발신 자리(role={RELAY_ROLE})를 못 찾았다. 다음 순찰에 재시도"
-        else:
+        for card, dispatch_id in stale_targets:
+            task_id = card["task_id"]
+            if dispatch_id in escalations:
+                continue  # 이 stale dispatch 는 이미 보고했다.
+            if relay is None:
+                # 발신 자리를 모르면 보내지 않는다. 성공으로 적지 않으므로 다음 순찰에 다시 온다.
+                sent_notes.append(
+                    f"escalation 보류 task={task_id} dispatch={dispatch_id} — 발신 자리(role={RELAY_ROLE})를 못 찾았다. 다음 순찰에 재시도"
+                )
+                continue
             sent = orca(
                 [
                     "orchestration", "send",
                     "--from", relay["handle"],
                     "--to", f"run:{run}",
                     "--type", "escalation",
-                    "--subject", f"supervisor_stall:{handle}",
+                    "--task-id", task_id,
+                    "--dispatch-id", dispatch_id,
+                    "--subject", f"worker_dispatch_stale:{dispatch_id}",
                     "--body",
-                    f"감독 화면에 연속 {cycles}회 진행 증거가 없다. 판정 근거: {basis}. "
-                    f"모델 판정: {verdict}{(' / ' + judge_note) if judge_note else ''}. "
-                    f"cursor={latest}, Context={ctx}%. 이 정체에 대해 한 번만 보고한다.",
+                    f"활성 worker dispatch 가 정체다. taskId={task_id} dispatchId={dispatch_id}. "
+                    f"감독 화면 판정: {basis}. 모델 판정: {verdict}"
+                    f"{(' / ' + judge_note) if judge_note else ''}. "
+                    f"cursor={latest}, Context={ctx}%. 같은 dispatch 에 대해 한 번만 보고한다.",
                 ]
             )
             if sent and sent.get("ok"):
                 msg_id = (sent.get("result", {}).get("message") or {}).get("id", "sent")
-                state["stall_escalation_id"] = msg_id
-                action = f"escalation 1회({msg_id})"
+                escalations[dispatch_id] = msg_id
+                sent_notes.append(f"escalation 1회({msg_id}) task={task_id} dispatch={dispatch_id}")
             else:
-                # 실패는 성공으로 적지 않는다. stall_escalation_id 를 남기지 않으므로
+                # 실패는 성공으로 적지 않는다 — dispatch_id 를 기록에 남기지 않으므로
                 # 같은 정체가 이어지면 다음 순찰이 그대로 다시 시도한다.
-                action = f"escalation 발송 실패({error_code(sent)}) — 다음 순찰에 재시도"
+                sent_notes.append(
+                    f"escalation 발송 실패({error_code(sent)}) task={task_id} dispatch={dispatch_id} — 다음 순찰에 재시도"
+                )
+    # 목표 5: stale 를 벗어난 dispatch(건강·완료·모름·사라짐)의 보고 기록을 지운다.
+    for did in list(escalations):
+        if did not in stale_dispatch_ids:
+            del escalations[did]
+    state["dispatch_escalations"] = escalations
+    if sent_notes:
+        action = sent_notes[-1] if len(sent_notes) == 1 else f"{len(sent_notes)}건: " + "; ".join(sent_notes)
 
+    active_count = len(active_cards) if active_cards is not None else None
     state.update(
         {
             "cursor": latest,
@@ -359,7 +614,8 @@ def patrol(project: str, board: str, run: str, log_path: Path, state_path: Path)
         f"agentState={member.get('agent_state')}) cursor {last_cursor}→{latest}, "
         f"새 출력 {returned}줄, 도구 실행 줄 {tool_lines}, "
         f"Context {prev_ctx}%→{ctx if ctx is not None else '변화없음'}, "
-        f"도는 일반 카드 {active if active is not None else '모름'}(상주 {resident}장 제외) "
+        f"도는 일반 카드 {active_count if active_count is not None else '모름'}(상주 {resident}장 제외) "
+        f"dispatch 건강·정체·완료·모름={healthy}·{stale}·{done}·{unknown} "
         f"| 판정={verdict} ({basis}){(' | 모델원문=' + judge_note) if judge_note else ''} "
         f"| 연속무진행={cycles} | 조치={action}",
     )
