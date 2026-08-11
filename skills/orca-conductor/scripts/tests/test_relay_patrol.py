@@ -1,17 +1,19 @@
-"""헤드리스 중계기 순찰 회귀 — 상주 카드 제외와 정체 상신 계약.
+"""헤드리스 중계기 순찰 회귀 — dispatch 건강도 기반 정체 보고 계약.
 
-Why (2026-08-12 F-RELAY-RESIDENT-COUNT 실측): 일반 작업이 0장인데 상주 카드
-RELAY-MONITOR 한 장이 dispatched 로 남아 있어서 순찰기가 "도는 카드 1"로 세었다.
-그래서 조용한 감독이 유휴가 아니라 정체로 찍혔고, 02:49/02:54/02:59 연속 무진행이
-3→5 까지 쌓였다. 같은 시간대에 상신도 8회 연속 실패했는데, 원인은 발신 자리(--from)가
-빠진 것이다 — 순찰기는 launchd PPID=1 데몬이라 붙은 터미널이 없어 번들 CLI 가
-`no_active_sender_terminal` 로 거절한다.
+Why (2026-08-12 F-RELAY-STRUCTURED-STALL 실측): 활성 카드(task_34f7e248c920)의
+dispatch(ctx_0665dde17589)가 정상 심박을 내고 있었는데, 감독이 worker_done 을 기다리며
+화면이 조용하다는 것만 보고 순찰이 supervisor_stall 로 오판했다(msg_b07782b049cf). 게다가
+그 escalation 에 taskId/dispatchId 구조화 필드가 없어 수명주기 소비자가
+MALFORMED_LIFECYCLE_REPORT 로 격리했다.
 
-여기서 잠그는 계약은 셋이다.
-  1. 상주 카드만 dispatched 면 일반 활성 수는 0이고 조용한 감독은 유휴다.
-  2. 일반 작업 카드가 있으면 그대로 세고, 연속 2회 실제 정체에서 escalation 이
-     정확히 한 번 나간다 (--from · --to run:<판> · --type escalation).
-  3. 발송 실패는 성공으로 적지 않고, 다음 순찰이 그대로 다시 시도한다.
+여기서 잠그는 계약은 coordinator.ts getStaleDispatches 의 권위 정의를 따른 것이다.
+  1. 건강한 활성 worker(정상 심박) + 조용한 감독 = 정상 대기. escalation 0 (목표 1).
+  2. 진짜 정체는 worker dispatch 의 권위 심박 시각으로 잰다(10분 = 심박 5분 × 2).
+     보고는 --task-id/--dispatch-id 구조화 필드에 실어 MALFORMED 격리를 막는다(목표 2).
+  3. 활성이 여러 개면 각 dispatch 를 따로 보고, stale 만 정확히 한 번(목표 3·4).
+  4. task-list/dispatch-show 가 망가지면 정상·정체 추측 없이 '모름'으로 닫는다(목표 4·6).
+  5. dispatch 가 stale 를 벗어나면 보고 기록이 지워져 재정체 때 다시 보고한다(목표 5).
+  6. taskId/dispatchId 없음·불일치·위조·completed dispatch 는 상태 적용용 보고에서 거른다(목표 5).
 
 실제 우편은 한 통도 나가지 않는다. 번들 CLI 자리는 통째로 가짜(fixture)로 바꾼다.
 """
@@ -20,6 +22,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from types import ModuleType
 
@@ -32,6 +35,22 @@ BOARD = "test-board"
 RUN = "run_testrelay0001"
 SUPERVISOR_HANDLE = "term_supervisor_0001"
 RELAY_HANDLE = "term_relay_0001"
+
+# dispatch 심박 신선도 판정의 고정 기준 시각. with_fake 가 _now_utc 를 이 값으로 고정한다.
+NOW = datetime(2026, 8, 11, 19, 45, 0, tzinfo=timezone.utc)
+# NOW 기준 시각선:
+#   FRESH ≈ 1분 전(건강), STALE_AGE = 15분 전(정체).
+#   EXACT_10MIN = 정확히 10분 전(== 임계, stale 아님 — 권위 SQL `< threshold` 경계).
+#   OVER_10MIN = 10분 1초 전(> 임계, stale).
+#   UNDER_10MIN = 9분 59초 전(< 임계, healthy).
+FRESH = "2026-08-11T19:44:06.000Z"
+STALE_AGE = "2026-08-11T19:30:00.000Z"
+EXACT_10MIN = "2026-08-11T19:35:00.000Z"
+OVER_10MIN = "2026-08-11T19:34:59.000Z"
+UNDER_10MIN = "2026-08-11T19:35:01.000Z"
+# task-list / dispatch-show 가 서로 일치해야 할 권위 기본값.
+DEFAULT_DISPATCH_ID = "ctx_0665dde17589"
+DEFAULT_ASSIGNEE = "term_worker_0001"
 
 
 def load_patrol() -> ModuleType:
@@ -48,15 +67,17 @@ def with_fake(
     fake: object,
     monkeypatch: pytest.MonkeyPatch,
     judge: tuple[str, str] | None = None,
+    now: datetime | None = None,
 ) -> ModuleType:
-    """순찰기를 새로 읽고 바깥으로 나가는 두 자리를 모두 가짜로 막는다.
+    """순찰기를 새로 읽고 바깥으로 나가는 자리를 모두 가짜로 막는다.
 
-    orca() 는 번들 CLI, ask_judge() 는 DeepSeek 호출이다. 둘 다 막으므로 이 시험에서
-    실제 우편도, 실제 모델 호출도 일어나지 않는다. judge 를 주지 않은 시험이 애매 갈래로
-    새면 그 자리에서 시끄럽게 떨어진다 — 조용히 진짜 모델을 부르는 것보다 낫다.
+    orca() 는 번들 CLI, ask_judge() 는 DeepSeek 호출이다. 둘 다 막으므로 실제 우편도
+    실제 모델 호출도 일어나지 않는다. now 를 주면 dispatch 심박 신선도의 기준 시각을
+    고정한다(기본 NOW). judge 를 주지 않은 시험이 애매 갈래로 가면 그 자리에서 떨어진다.
     """
     module = load_patrol()
     monkeypatch.setattr(module, "orca", fake)
+    monkeypatch.setattr(module, "_now_utc", lambda: now if now is not None else NOW)
 
     def judge_stub(snippet: str) -> tuple[str, str]:
         if judge is None:
@@ -68,20 +89,114 @@ def with_fake(
 
 
 _UNSET = object()
+_NO_DISPATCH = object()
+_DISPATCH_FAIL = object()
 
 
-def card(title: str | None, status: object = "dispatched") -> dict:
-    """시험용 카드 한 장.
+# title → 권위 16진수 task_id 매핑. F-RELAY-STRUCTURED-STALL-3: 시험 fixture 의
+# taskId 를 비권위(task_F-REAL-WORK)에서 권위 형식(task_<소문자16진수 8+>)으로 바꾼다.
+# 결정적 매핑이라 같은 title 은 항상 같은 ID 를 주어 card/disp 교차검증이 맞는다.
+TITLE_TASK_IDS = {
+    "F-REAL-WORK": "task_a1b2c3d4e5f60001",
+    "F-HEALTHY": "task_a1b2c3d4e5f60002",
+    "F-STALE": "task_a1b2c3d4e5f60003",
+    "RELAY-MONITOR-test-board": "task_a1b2c3d4e5f60004",
+    "RELAY-MONITORING — ordinary feature card": "task_a1b2c3d4e5f60005",
+    "F-REAL": "task_a1b2c3d4e5f60006",
+    "F-OLD-DONE": "task_a1b2c3d4e5f60007",
+    "R-SOMETHING": "task_a1b2c3d4e5f60008",
+    "F-DONE": "task_a1b2c3d4e5f60009",
+    "F-REAL-CASE": "task_a1b2c3d4e5f6000a",
+}
 
-    title=None 이면 제목 칸 자체가 없고, status=None 이면 상태 칸 자체가 없다.
-    status 에는 문자열이 아닌 값도 그대로 넣을 수 있다 — 망가진 자료형을 재현해야 한다.
+
+def _task_id_for(title: str | None) -> str:
+    """title 의 권위 task_id. 모르는 title 은 결정적 해시 기반 16진수 ID 를 만든다."""
+    if title in TITLE_TASK_IDS:
+        return TITLE_TASK_IDS[title]
+    # 결정적 fallback: title 해시를 소문자 16진수 8자리로.
+    import hashlib
+    h = hashlib.sha256(str(title).encode()).hexdigest()[:8]
+    return f"task_fb{h}"
+
+
+def card(
+    title: str | None,
+    status: object = "dispatched",
+    *,
+    dispatch_id: str | None = DEFAULT_DISPATCH_ID,
+    assignee: str | None = DEFAULT_ASSIGNEE,
+    task_id: str | None = None,
+) -> dict:
+    """시험용 카드 한 장. id 는 권위 형식 task_<소문자16진수 8+> (title 매핑).
+
+    title 은 사람이 읽는 라벨(task_title)이고 task_id 는 권위 식별자다.
+    F-RELAY-STRUCTURED-STALL-3: 비권위 ID(task_F-REAL-WORK)를 쓰면 TASK_ID_RE 검증이
+    시험 자체를 깨뜨리므로 권위 16진수 ID 로 바꾼다. task_id= 로 직접 줄 수도 있다
+    (위조 ID 공격 시험용).
     """
-    row: dict = {"id": f"task_{title}"}
+    tid_val = task_id if task_id is not None else _task_id_for(title)
+    row: dict = {"id": tid_val}
     if title is not None:
         row["task_title"] = title
     if status is not None:
         row["status"] = status
+        if status == "dispatched":
+            if dispatch_id is not None:
+                row["dispatch_id"] = dispatch_id
+            if assignee is not None:
+                row["assignee_handle"] = assignee
     return row
+
+
+def tid(title: str = "F-REAL-WORK") -> str:
+    """title 의 권위 task_id (card() 와 같은 매핑)."""
+    return _task_id_for(title)
+
+
+def disp(
+    task_id: str,
+    dispatch_id: str = DEFAULT_DISPATCH_ID,
+    *,
+    status: str = "dispatched",
+    heartbeat: str | None = FRESH,
+    dispatched: str = FRESH,
+    run_id: str = RUN,
+    assignee: str = DEFAULT_ASSIGNEE,
+) -> dict:
+    """시험용 dispatch 행 한 개. dispatch-show 의 result.dispatch 모양을 따른다."""
+    return {
+        "id": dispatch_id,
+        "task_id": task_id,
+        "run_id": run_id,
+        "status": status,
+        "assignee_handle": assignee,
+        "assignee_pane_key": "pane_worker_0001",
+        "dispatched_at": dispatched,
+        "last_heartbeat_at": heartbeat,
+    }
+
+
+def stale_disp(task_id: str, **kw: object) -> dict:
+    kw.setdefault("heartbeat", STALE_AGE)
+    kw.setdefault("dispatched", STALE_AGE)
+    return disp(task_id, **kw)  # type: ignore[arg-type]
+
+
+def done_disp(task_id: str, **kw: object) -> dict:
+    kw.setdefault("status", "completed")
+    return disp(task_id, **kw)  # type: ignore[arg-type]
+
+
+def _dispatch_show_response(fixture: object) -> dict | None:
+    """dispatch-show 가짜 응답. fixture 모양에 따라 정상·무기록·실패·망가짐을 낸다."""
+    if fixture is _DISPATCH_FAIL:
+        return None
+    if fixture is _NO_DISPATCH:
+        return {"ok": True, "result": {"dispatch": None}}
+    if isinstance(fixture, tuple) and fixture and fixture[0] == "__raw__":
+        return fixture[1]  # 전체 orca 응답을 그대로 준다(망가진 result 모양 재현).
+    return {"ok": True, "result": {"dispatch": fixture}}
 
 
 class FakeOrca:
@@ -94,12 +209,13 @@ class FakeOrca:
         relay_live: bool = True,
         send_results: list[dict] | None = None,
         task_list_result: object = _UNSET,
+        dispatches: dict | None = None,
     ) -> None:
         # tasks 는 목록이 아닐 수도 있다. 망가진 응답도 그대로 흘려보내야 fail-closed 를 잰다.
         self.tasks = tasks
-        # result 껍질 자체를 바꿔 보고 싶을 때만 쓴다(비객체 result 회귀).
         self.task_list_result = task_list_result
         self.relay_live = relay_live
+        self.dispatches = dispatches or {}
         # 순서대로 하나씩 꺼내 쓴다. 다 떨어지면 마지막 것을 계속 쓴다.
         self.send_results = send_results or [
             {"ok": True, "result": {"message": {"id": "msg_ok_0001"}}}
@@ -138,7 +254,11 @@ class FakeOrca:
         if args[:2] == ["orchestration", "task-list"]:
             if self.task_list_result is not _UNSET:
                 return {"ok": True, "result": self.task_list_result}
-            return {"ok": True, "result": {"tasks": self.tasks}}
+            # 공개 CLI 계약: result.runId 는 번들이 해석한 실제 run 이다 (기본 RUN).
+            return {"ok": True, "result": {"runId": RUN, "tasks": self.tasks}}
+        if args[:2] == ["orchestration", "dispatch-show"]:
+            task = args[args.index("--task") + 1]
+            return _dispatch_show_response(self.dispatches.get(task, _NO_DISPATCH))
         if args[:2] == ["orchestration", "send"]:
             return (
                 self.send_results.pop(0) if len(self.send_results) > 1 else self.send_results[0]
@@ -176,9 +296,8 @@ def flag(args: list[str], name: str) -> str:
     return args[args.index(name) + 1]
 
 
-# --- 1. 상주 카드 제외 -------------------------------------------------------
 
-
+# --- 1. 상주 카드 제외 / count_dispatched 단위 계약 --------------------------
 def test_resident_card_is_not_counted_as_active_work(monkeypatch: pytest.MonkeyPatch) -> None:
     module = with_fake(
         FakeOrca(
@@ -190,6 +309,7 @@ def test_resident_card_is_not_counted_as_active_work(monkeypatch: pytest.MonkeyP
         monkeypatch,
     )
     assert module.count_dispatched(RUN) == (0, 1)
+
 
 
 def test_mixed_cards_count_only_ordinary_work(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -207,9 +327,11 @@ def test_mixed_cards_count_only_ordinary_work(monkeypatch: pytest.MonkeyPatch) -
     assert module.count_dispatched(RUN) == (1, 1)
 
 
+
 def test_task_list_failure_stays_unknown_not_zero(monkeypatch: pytest.MonkeyPatch) -> None:
     module = with_fake(lambda args: None, monkeypatch)
     assert module.count_dispatched(RUN) is None
+
 
 
 def test_quiet_supervisor_with_only_resident_card_reports_idle(
@@ -229,38 +351,82 @@ def test_quiet_supervisor_with_only_resident_card_reports_idle(
     assert fake.sends == []
 
 
-# --- 2. 진짜 정체는 정확히 한 번 상신된다 ------------------------------------
 
 
-def test_two_real_stalls_send_exactly_one_escalation(
+
+# --- 2. dispatch 건강도 기반 정체 보고 (목표 1·2·3) ---------------------------
+#
+# Why (2026-08-12 F-RELAY-STRUCTURED-STALL): 감독 화면 무출력만으로 정체로 보면,
+# worker_done 을 정상적으로 기다리는 조용한 감독이 정체로 오판된다. 보고의 방아쇠는
+# 감독 화면 주기가 아니라 worker dispatch 의 권위 심박 시각이다.
+
+
+def test_healthy_worker_quiet_supervisor_is_normal_wait_no_escalation(
     paths: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    fake = FakeOrca([card("RELAY-MONITOR-test-board"), card("F-REAL-WORK")])
+    # 사건 msg_b07782b049cf 재현: 건강한 worker(정상 심박) + 조용한 감독.
+    t = tid("F-REAL-WORK")
+    fake = FakeOrca([card("F-REAL-WORK")], dispatches={t: disp(t)})
+    module = with_fake(fake, monkeypatch)
+
+    lines = run_patrol(module, paths, times=3)
+
+    assert len(lines) == 3
+    for line in lines:
+        assert "판정=정상 대기" in line
+        assert "건강 1" in line
+        assert "연속무진행=0" in line
+    # 정상 대기는 보고 대상이 아니다. 세 번 돌아도 우편은 한 통도 없다.
+    assert fake.sends == []
+
+
+def test_worker_done_wait_heartbeat_refresh_is_normal_wait(
+    paths: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # worker_done 대기 중 심박이 계속 갱신되면 계속 정상 대기다 (필수 회귀 2).
+    t = tid("F-REAL-WORK")
+    fake = FakeOrca([card("F-REAL-WORK")], dispatches={t: disp(t, heartbeat=FRESH)})
+    module = with_fake(fake, monkeypatch)
+
+    lines = run_patrol(module, paths, times=4)
+
+    assert all("판정=정상 대기" in line for line in lines)
+    assert fake.sends == []
+
+
+def test_stale_dispatch_escalates_once_with_accurate_ids(
+    paths: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 진짜 정체(stale 심박)는 권위 taskId+dispatchId 를 가진 보고 정확히 1회 (필수 회귀 3).
+    t = tid("F-REAL-WORK")
+    fake = FakeOrca([card("F-REAL-WORK")], dispatches={t: stale_disp(t)})
     module = with_fake(fake, monkeypatch)
 
     first = run_patrol(module, paths, times=1)
     assert "판정=정체" in first[0]
-    assert "도는 일반 카드 1(상주 1장 제외)" in first[0]
-    assert "연속무진행=1" in first[0]
-    assert fake.sends == []
-
-    lines = run_patrol(module, paths, times=3)
-    assert len(lines) == 4
-    assert "연속무진행=2" in lines[1]
-    assert "escalation 1회(msg_ok_0001)" in lines[1]
-    # 같은 정체가 이어져도 두 번째 우편은 없다.
-    assert "escalation" not in lines[2].split("| 조치=")[1]
-    assert "escalation" not in lines[3].split("| 조치=")[1]
+    assert "worker dispatch 정체(stale 1)" in first[0]
     assert len(fake.sends) == 1
+    sent = fake.sends[0]
+    assert flag(sent, "--task-id") == t
+    assert flag(sent, "--dispatch-id") == "ctx_0665dde17589"
+    assert flag(sent, "--type") == "escalation"
+
+    # 같은 stale dispatch 가 이어져도 두 번째 우편은 없다.
+    lines = run_patrol(module, paths, times=2)
+    assert len(fake.sends) == 1
+    assert "escalation" not in lines[1].split("| 조치=")[1]
+    assert "escalation" not in lines[2].split("| 조치=")[1]
 
 
-def test_escalation_uses_current_bundle_cli_contract(
+def test_escalation_carries_full_bundle_cli_contract(
     paths: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    fake = FakeOrca([card("RELAY-MONITOR-test-board"), card("F-REAL-WORK")])
+    t = tid("F-REAL-WORK")
+    fake = FakeOrca([card("F-REAL-WORK", dispatch_id="ctx_aabbccdd0001")],
+                        dispatches={t: stale_disp(t, dispatch_id="ctx_aabbccdd0001")})
     module = with_fake(fake, monkeypatch)
 
-    run_patrol(module, paths, times=2)
+    run_patrol(module, paths, times=1)
 
     assert len(fake.sends) == 1
     sent = fake.sends[0]
@@ -269,47 +435,80 @@ def test_escalation_uses_current_bundle_cli_contract(
     assert flag(sent, "--from") == RELAY_HANDLE
     assert flag(sent, "--to") == f"run:{RUN}"
     assert flag(sent, "--type") == "escalation"
-    assert flag(sent, "--subject") == f"supervisor_stall:{SUPERVISOR_HANDLE}"
+    assert flag(sent, "--task-id") == t
+    assert flag(sent, "--dispatch-id") == "ctx_aabbccdd0001"
+    assert flag(sent, "--subject") == "worker_dispatch_stale:ctx_aabbccdd0001"
     # 발신 자리는 캐시하지 않고 보내기 직전에 명부에서 다시 찾는다.
     assert ["roster", "resolve"] == fake.calls[-2][:2]
     assert flag(fake.calls[-2], "--role") == "relay"
 
 
-def test_progress_resets_cycles_and_allows_a_later_escalation(
+def test_two_active_one_healthy_one_stale_reports_only_stale(
     paths: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    fake = FakeOrca([card("F-REAL-WORK")])
-    module = with_fake(fake, monkeypatch, judge=("진행", "새 도구 실행"))
+    # 활성 2개 중 하나 건강/하나 stale 이면 stale 대상만 정확히 보고 (필수 회귀 4).
+    th = tid("F-HEALTHY")
+    ts = tid("F-STALE")
+    fake = FakeOrca(
+        [card("F-HEALTHY", dispatch_id="ctx_aabbccdd0003"),
+         card("F-STALE", dispatch_id="ctx_aabbccdd0002")],
+        dispatches={th: disp(th, dispatch_id="ctx_aabbccdd0003"),
+                    ts: stale_disp(ts, dispatch_id="ctx_aabbccdd0002")},
+    )
+    module = with_fake(fake, monkeypatch)
 
-    run_patrol(module, paths, times=2)
+    lines = run_patrol(module, paths, times=1)
+    assert "건강·정체·완료·모름=1·1·0·0" in lines[0]
+    assert len(fake.sends) == 1
+    assert flag(fake.sends[0], "--task-id") == ts
+    assert flag(fake.sends[0], "--dispatch-id") == "ctx_aabbccdd0002"
+
+    # 두 번째 순찰에도 stale 는 그 한 번만, 건강은 끝내 보고하지 않는다.
+    run_patrol(module, paths, times=1)
     assert len(fake.sends) == 1
 
-    # 감독이 다시 움직이면 정체 기록이 지워진다.
-    fake.advance = 500
+
+def test_grace_period_dispatched_no_heartbeat_is_healthy(
+    paths: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 발령 직후(첫 심박 유예)엔 심박이 아직 없어도 정체가 아니다 — coordinator getStaleDispatches
+    # 의 dispatched_at < 임계 조건이 거기서부터 시작하기 때문이다.
+    t = tid("F-REAL-WORK")
+    fake = FakeOrca([card("F-REAL-WORK")], dispatches={t: disp(t, heartbeat=None, dispatched=FRESH)})
+    module = with_fake(fake, monkeypatch)
+
     lines = run_patrol(module, paths, times=1)
-    assert "판정=진행" in lines[2]
-    assert "연속무진행=0" in lines[2]
-
-    # 그리고 다음 정체는 처음부터 다시 세어 새로 한 번만 상신된다.
-    fake.advance = 0
-    fake.send_results = [{"ok": True, "result": {"message": {"id": "msg_ok_0002"}}}]
-    lines = run_patrol(module, paths, times=3)
-
-    assert "연속무진행=1" in lines[3]
-    assert "escalation" not in lines[3].split("| 조치=")[1]
-    assert "escalation 1회(msg_ok_0002)" in lines[4]
-    assert "escalation" not in lines[5].split("| 조치=")[1]
-    assert len(fake.sends) == 2
+    assert "판정=정상 대기" in lines[0]
+    assert fake.sends == []
 
 
-# --- 3. 발송 실패는 성공으로 기록되지 않는다 ---------------------------------
+def test_old_dispatched_but_fresh_heartbeat_is_healthy(
+    paths: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 발령은 오래됐지만 심박이 최신이면 건강이다 — coordinator getStaleDispatches 의
+    # (last_heartbeat_at >= 임계) 조건이 정체를 거부한다. 심박 무시 변형을 잡는 대조군.
+    t = tid("F-REAL-WORK")
+    fake = FakeOrca(
+        [card("F-REAL-WORK")],
+        dispatches={t: disp(t, heartbeat=FRESH, dispatched=STALE_AGE)},
+    )
+    module = with_fake(fake, monkeypatch)
+
+    lines = run_patrol(module, paths, times=1)
+    assert "판정=정상 대기" in lines[0]
+    assert fake.sends == []
+
+
+# --- 3. 발송 실패는 성공으로 기록되지 않는다 (필수 회귀 8) ---------------------
 
 
 def test_send_failure_is_not_recorded_and_retries_next_patrol(
     paths: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    t = tid("F-REAL-WORK")
     fake = FakeOrca(
         [card("F-REAL-WORK")],
+        dispatches={t: stale_disp(t)},
         send_results=[
             {"ok": False, "error": {"code": "no_active_sender_terminal"}},
             {"ok": True, "result": {"message": {"id": "msg_ok_0003"}}},
@@ -318,16 +517,16 @@ def test_send_failure_is_not_recorded_and_retries_next_patrol(
     module = with_fake(fake, monkeypatch)
     _, state_path = paths
 
-    lines = run_patrol(module, paths, times=2)
-    assert "escalation 발송 실패(no_active_sender_terminal)" in lines[1]
-    assert "다음 순찰에 재시도" in lines[1]
-    # 실패를 성공으로 적지 않았다 — 그래야 다음 순찰이 다시 시도한다.
-    assert "stall_escalation_id" not in state_path.read_text()
+    lines = run_patrol(module, paths, times=1)
+    assert "escalation 발송 실패(no_active_sender_terminal)" in lines[0]
+    assert "다음 순찰에 재시도" in lines[0]
+    # 실패를 성공으로 적지 않았다 — dispatch_escalations 에 dispatchId 가 없다.
+    assert "ctx_0665dde17589" not in state_path.read_text()
 
     lines = run_patrol(module, paths, times=1)
     assert len(fake.sends) == 2
-    assert "escalation 1회(msg_ok_0003)" in lines[2]
-    assert "msg_ok_0003" in state_path.read_text()
+    assert "escalation 1회(msg_ok_0003)" in lines[1]
+    assert "ctx_0665dde17589" in state_path.read_text()
 
     # 성공한 뒤에는 같은 정체에 대해 더 보내지 않는다.
     run_patrol(module, paths, times=1)
@@ -342,36 +541,666 @@ def test_cli_no_output_failure_names_its_reason(
             result = super().__call__(args)
             return None if args[:2] == ["orchestration", "send"] else result
 
-    fake = Silent([card("F-REAL-WORK")])
+    t = tid("F-REAL-WORK")
+    fake = Silent([card("F-REAL-WORK")], dispatches={t: stale_disp(t)})
     module = with_fake(fake, monkeypatch)
 
-    lines = run_patrol(module, paths, times=2)
-    assert "escalation 발송 실패(cli_no_output)" in lines[1]
+    lines = run_patrol(module, paths, times=1)
+    assert "escalation 발송 실패(cli_no_output)" in lines[0]
     assert len(fake.sends) == 1
 
 
 def test_missing_relay_sender_holds_instead_of_sending(
     paths: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    fake = FakeOrca([card("F-REAL-WORK")], relay_live=False)
+    t = tid("F-REAL-WORK")
+    fake = FakeOrca([card("F-REAL-WORK")], dispatches={t: stale_disp(t)}, relay_live=False)
     module = with_fake(fake, monkeypatch)
     _, state_path = paths
 
+    lines = run_patrol(module, paths, times=1)
+    assert fake.sends == []
+    assert "escalation 보류" in lines[0]
+    assert "발신 자리(role=relay)를 못 찾았다" in lines[0]
+    assert "ctx_0665dde17589" not in state_path.read_text()
+
+
+# --- 4. 제목 경계: 상주 이름과 남남인 제목을 가른다 (patrol 수준) ---------------
+#
+# 유사 제목(RELAY-MONITORING …)은 상주가 아니라 일반 작업이다. 그 카드의 dispatch 가
+# stale 면 정체 보고가 나가야 한다 — 상주로 잘못 빠지면 유휴로 덮인다.
+
+
+def test_similar_title_is_ordinary_and_its_stale_dispatch_escalates(
+    paths: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    t = tid("RELAY-MONITORING — ordinary feature card")
+    fake = FakeOrca(
+        [card("RELAY-MONITORING — ordinary feature card")],
+        dispatches={t: stale_disp(t)},
+    )
+    module = with_fake(fake, monkeypatch)
+
+    lines = run_patrol(module, paths, times=1)
+    assert "도는 일반 카드 1(상주 0장 제외)" in lines[0]
+    assert "판정=정체" in lines[0]
+    assert len(fake.sends) == 1
+
+
+# --- 5. 망가진 응답은 정체/정상 추측 없이 '모름'으로 닫는다 (목표 4·6) ---------
+#
+# Why: task-list/dispatch-show 가 망가지면 정상도 정체도 알 수 없다. 예전에는 망가진
+# task-list 를 정체로 추측해 식별자 없는 보고를 보냈다. 이제 모름으로 닫고 보고 0,
+# 거짓 정상 0, 예외 0 이다 (필수 회귀 6).
+
+
+def test_unknown_task_status_closes_as_unknown_no_escalation(
+    paths: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = FakeOrca([card("F-REAL-WORK", status="mystery")])
+    module = with_fake(fake, monkeypatch)
+
+    lines = run_patrol(module, paths, times=3)
+
+    assert all("판정=모름" in line for line in lines)
+    assert all("도는 일반 카드 모름" in line for line in lines)
+    # 모름은 보고도, 거짓 정상도 아니다.
+    assert fake.sends == []
+    assert not any("판정=유휴" in line or "판정=정상 대기" in line for line in lines)
+
+
+def test_broken_task_list_row_closes_as_unknown_no_escalation(
+    paths: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = FakeOrca([None, card("F-REAL-WORK")])
+    module = with_fake(fake, monkeypatch)
+
     lines = run_patrol(module, paths, times=2)
 
+    assert len(lines) == 2
+    assert all("판정=모름" in line for line in lines)
+    assert all("도는 일반 카드 모름" in line for line in lines)
     assert fake.sends == []
-    assert "escalation 보류 — 발신 자리(role=relay)를 못 찾았다" in lines[1]
-    assert "stall_escalation_id" not in state_path.read_text()
 
 
-# --- 4. 제목 경계: 상주 이름과 남남인 제목을 가른다 --------------------------
+@pytest.mark.parametrize("task_list_result", ["ok", {"count": 0}, "dispatched"])
+def test_malformed_task_list_result_closes_as_unknown(
+    task_list_result: object,
+    paths: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakeOrca([], task_list_result=task_list_result)
+    module = with_fake(fake, monkeypatch)
+
+    lines = run_patrol(module, paths, times=2)
+
+    assert all("판정=모름" in line for line in lines)
+    assert fake.sends == []
+
+
+class _TaskListFail(FakeOrca):
+    def __call__(self, args: list[str]) -> dict | None:
+        if args[:2] == ["orchestration", "task-list"]:
+            return None
+        return super().__call__(args)
+
+
+def test_task_list_cli_failure_closes_as_unknown(
+    paths: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # roster/terminal 은 정상이고 task-list 만 None(모름)이면 판정도 모름이다.
+    fake = _TaskListFail([card("F-REAL-WORK")])
+    module = with_fake(fake, monkeypatch)
+    lines = run_patrol(module, paths, times=2)
+    assert all("판정=모름" in line for line in lines)
+    assert fake.sends == []
+
+
+# --- 6. status 자료형까지 fail-closed (patrol 수준) ----------------------------
+
+
+@pytest.mark.parametrize("status", [[], {}, ["dispatched"]])
+def test_unhashable_status_closes_as_unknown_no_crash(
+    status: object,
+    paths: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """해시 불가 status 가 와도 순찰은 돌고, 모름으로 닫힌다. 보고는 0, 예외는 0."""
+    fake = FakeOrca([card("F-REAL-WORK", status=status)])
+    module = with_fake(fake, monkeypatch)
+
+    lines = run_patrol(module, paths, times=3)
+
+    assert len(lines) == 3
+    assert all("판정=모름" in line for line in lines)
+    assert all("도는 일반 카드 모름" in line for line in lines)
+    assert fake.sends == []
+
+
+# --- 7. 식별자 거부·상태 변경 초기화·비상태 진단 (목표 3·5) ---------------------
 #
-# Why (2026-08-12 독립 검수 중요 1): 앞머리 일치만 보면 `RELAY-MONITORING — 일반 기능
-# 카드`도 상주로 빠진다. 그러면 일반 작업이 0장으로 보여 진짜 정체가 통째로 유휴로
-# 덮이고 상신이 0통이 된다. 그래서 이름 경계 대조군을 정확·하이픈·유사·공백·없음까지
-# 한 표에 깔아 둔다.
+# Why (필수 회귀 5·목표 3): taskId/dispatchId 없음·불일치·위조·completed dispatch 는
+# 상태 적용용 보고에서 거른다. dispatch 가 stale 를 벗어나면 보고 기록이 지워져
+# 재정체 때 다시 보고한다. 어떤 카드에도 귀속 못 시킨 supervisor-only 상태는
+# lifecycle 보고가 아니라 모름 진단으로 분리한다.
 
 
+@pytest.mark.parametrize(
+    ("label", "fixture"),
+    [
+        ("task_id 없음", {"id": "ctx_0665dde17589", "task_id": None, "status": "dispatched",
+                          "dispatched_at": STALE_AGE, "last_heartbeat_at": None}),
+        ("dispatch_id 없음", {"id": None, "task_id": tid(), "status": "dispatched",
+                              "dispatched_at": STALE_AGE, "last_heartbeat_at": None}),
+        ("task_id 불일치", disp("task_SOMEONE_ELSE", heartbeat=None, dispatched=STALE_AGE)),
+        ("위조 dispatch_id", {"id": "ctx_forged", "task_id": tid(), "status": "dispatched",
+                               "dispatched_at": STALE_AGE, "last_heartbeat_at": None}),
+        ("completed dispatch", done_disp(tid())),
+        ("pending dispatch", {"id": "ctx_0665dde17589", "task_id": tid(), "status": "pending",
+                               "dispatched_at": STALE_AGE, "last_heartbeat_at": None}),
+    ],
+)
+def test_unauthoritative_or_terminal_dispatch_never_escalates(
+    label: str,
+    fixture: dict,
+    paths: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    t = tid("F-REAL-WORK")
+    fake = FakeOrca([card("F-REAL-WORK")], dispatches={t: fixture})
+    module = with_fake(fake, monkeypatch)
+
+    run_patrol(module, paths, times=3)
+    # 권위 식별자가 없거나 종료된 dispatch 는 stale 가 될 수 없어 보고도 안 나간다.
+    assert fake.sends == [], label
+
+
+def test_dispatch_leaving_stale_resets_so_restall_reports_again(
+    paths: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # stale → 보고 1회 → healthy 로 바뀌면 기록 초기화 → 다시 stale → 다시 보고 (목표 5).
+    t = tid("F-REAL-WORK")
+    fixture = stale_disp(t)
+    fake = FakeOrca([card("F-REAL-WORK")], dispatches={t: fixture})
+    module = with_fake(fake, monkeypatch)
+
+    run_patrol(module, paths, times=1)
+    assert len(fake.sends) == 1
+
+    # worker 가 다시 심박을 내면 정상 대기로 돌아가고, 보고 기록이 지워진다.
+    fixture["last_heartbeat_at"] = FRESH
+    fixture["dispatched_at"] = FRESH
+    lines = run_patrol(module, paths, times=1)
+    assert "판정=정상 대기" in lines[1]
+    assert len(fake.sends) == 1  # 새 보고 없음
+
+    # 다시 stale 로 떨어지면 기록이 비어 있어 다시 한 번 보고한다.
+    fixture["last_heartbeat_at"] = STALE_AGE
+    fixture["dispatched_at"] = STALE_AGE
+    fake.send_results = [{"ok": True, "result": {"message": {"id": "msg_restall_0002"}}}]
+    lines = run_patrol(module, paths, times=1)
+    assert "escalation 1회(msg_restall_0002)" in lines[2]
+    assert len(fake.sends) == 2
+
+
+def test_dispatch_disappearing_from_task_list_resets_tracking(
+    paths: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 카드가 task-list 에서 사라져(예: worker_done 종결)도 보고 기록이 지워진다.
+    t = tid("F-REAL-WORK")
+    fake = FakeOrca([card("F-REAL-WORK")], dispatches={t: stale_disp(t)})
+    module = with_fake(fake, monkeypatch)
+
+    run_patrol(module, paths, times=1)
+    assert len(fake.sends) == 1
+
+    fake.tasks = []  # 카드 종결
+    run_patrol(module, paths, times=1)
+    _, state_path = paths
+    assert "dispatch_escalations" not in state_path.read_text() or \
+        "ctx_0665dde17589" not in state_path.read_text()
+
+
+def test_supervisor_only_state_with_all_unknown_is_not_lifecycle_escalation(
+    paths: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 활성 카드는 있으나 dispatch-show 를 전부 못 읽으면(모름) 어떤 카드에도 귀속 못 시킨다.
+    # 이 supervisor-only 상태는 lifecycle 보고가 아니라 모름 진단이다 (목표 3).
+    t = tid("F-REAL-WORK")
+    fake = FakeOrca([card("F-REAL-WORK")], dispatches={t: _DISPATCH_FAIL})
+    module = with_fake(fake, monkeypatch)
+
+    lines = run_patrol(module, paths, times=3)
+    assert all("판정=모름" in line for line in lines)
+    assert all("모름 1" in line for line in lines)
+    assert fake.sends == []
+
+
+def test_malformed_dispatch_show_result_closes_as_unknown(
+    paths: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    t = tid("F-REAL-WORK")
+    fake = FakeOrca(
+        [card("F-REAL-WORK")],
+        dispatches={t: ("__raw__", {"ok": True, "result": "not-an-object"})},
+    )
+    module = with_fake(fake, monkeypatch)
+
+    lines = run_patrol(module, paths, times=2)
+    assert all("판정=모름" in line for line in lines)
+    assert fake.sends == []
+
+
+def test_known_dispatch_statuses_match_the_shipped_bundle() -> None:
+    """dispatch_contexts.status 가 허용하는 값 5개 (소스 DispatchStatus union 실측).
+
+    src/main/runtime/orchestration/types.ts:21
+        DispatchStatus = 'pending'|'dispatched'|'completed'|'failed'|'circuit_broken'
+    이 집합이 조용히 바뀌면 모르는 상태를 정상/정체로 뭉갤 수 있으므로 여기서 못박는다.
+    """
+    module = load_patrol()
+    assert module.KNOWN_DISPATCH_STATUSES == {
+        "pending",
+        "dispatched",
+        "completed",
+        "failed",
+        "circuit_broken",
+    }
+
+
+def test_dispatch_stale_sec_matches_coordinator_hung_threshold() -> None:
+    """coordinator.ts:75 HUNG_THRESHOLD_MS = 10*60*1000 (10분 = 심박 5분 × 2)."""
+    module = load_patrol()
+    assert module.DISPATCH_STALE_SEC == 10 * 60
+
+
+# --- 8. 권위 교차검증 (F-RELAY-STRUCTURED-STALL-2 중요 1·2·3) ------------------
+#
+# Why: task-list 와 dispatch-show 의 dispatch/run/assignee 를 교차검증하지 않으면 외국
+# dispatch 를 현재 판의 정체로 보고하거나 서로 다른 작업자를 결합하는 권위 오결합이 난다.
+# 하나라도 누락·빈값·불일치면 모름으로 닫고 보고 0 이다. 검수 독립 공격 9개 전부 여기 잠긴다.
+
+
+def test_task_list_dispatch_id_mismatch_fails_closed(
+    paths: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # task-list dispatch_id=ctx_b, dispatch-show id=ctx_a → 모름, 보고 0 (중요 1).
+    t = tid("F-REAL-WORK")
+    fake = FakeOrca(
+        [card("F-REAL-WORK", dispatch_id="ctx_bbbbbbb0002")],
+        dispatches={t: stale_disp(t, dispatch_id=DEFAULT_DISPATCH_ID)},
+    )
+    module = with_fake(fake, monkeypatch)
+    lines = run_patrol(module, paths, times=1)
+    assert "판정=모름" in lines[0]
+    assert fake.sends == []
+
+
+def test_assignee_mismatch_fails_closed(
+    paths: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    t = tid("F-REAL-WORK")
+    fake = FakeOrca(
+        [card("F-REAL-WORK", assignee=DEFAULT_ASSIGNEE)],
+        dispatches={t: stale_disp(t, assignee="term_worker_OTHER")},
+    )
+    module = with_fake(fake, monkeypatch)
+    lines = run_patrol(module, paths, times=1)
+    assert "판정=모름" in lines[0]
+    assert fake.sends == []
+
+
+def test_dispatch_assignee_missing_fails_closed(
+    paths: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    t = tid("F-REAL-WORK")
+    fake = FakeOrca(
+        [card("F-REAL-WORK")],
+        dispatches={t: stale_disp(t, assignee=None)},
+    )
+    module = with_fake(fake, monkeypatch)
+    lines = run_patrol(module, paths, times=1)
+    assert "판정=모름" in lines[0]
+    assert fake.sends == []
+
+
+def test_task_list_assignee_missing_fails_closed(
+    paths: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    t = tid("F-REAL-WORK")
+    fake = FakeOrca(
+        [card("F-REAL-WORK", assignee=None)],
+        dispatches={t: stale_disp(t)},
+    )
+    module = with_fake(fake, monkeypatch)
+    lines = run_patrol(module, paths, times=1)
+    assert "판정=모름" in lines[0]
+    assert fake.sends == []
+
+
+def test_task_list_dispatch_id_missing_fails_closed(
+    paths: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    t = tid("F-REAL-WORK")
+    fake = FakeOrca(
+        [card("F-REAL-WORK", dispatch_id=None)],
+        dispatches={t: stale_disp(t)},
+    )
+    module = with_fake(fake, monkeypatch)
+    lines = run_patrol(module, paths, times=1)
+    assert "판정=모름" in lines[0]
+    assert fake.sends == []
+
+
+def test_dispatch_run_mismatch_fails_closed(
+    paths: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    t = tid("F-REAL-WORK")
+    fake = FakeOrca(
+        [card("F-REAL-WORK")],
+        dispatches={t: stale_disp(t, run_id="run_FOREIGN0001")},
+    )
+    module = with_fake(fake, monkeypatch)
+    lines = run_patrol(module, paths, times=1)
+    assert "판정=모름" in lines[0]
+    assert fake.sends == []
+
+
+@pytest.mark.parametrize("run_id", [None, ""])
+def test_dispatch_run_missing_or_empty_fails_closed(
+    run_id: object,
+    paths: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    t = tid("F-REAL-WORK")
+    fake = FakeOrca(
+        [card("F-REAL-WORK")],
+        dispatches={t: stale_disp(t, run_id=run_id)},  # type: ignore[arg-type]
+    )
+    module = with_fake(fake, monkeypatch)
+    lines = run_patrol(module, paths, times=1)
+    assert "판정=모름" in lines[0]
+    assert fake.sends == []
+
+
+def test_task_list_run_id_mismatch_fails_closed(
+    paths: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # task-list result.runId 가 요청 run 과 다르면 외국 판이다 — 모름으로 닫는다 (중요 3).
+    t = tid("F-REAL-WORK")
+    fake = FakeOrca(
+        [card("F-REAL-WORK")],
+        dispatches={t: stale_disp(t)},
+        task_list_result={"runId": "run_FOREIGN0001", "tasks": [card("F-REAL-WORK")]},
+    )
+    module = with_fake(fake, monkeypatch)
+    lines = run_patrol(module, paths, times=1)
+    assert "판정=모름" in lines[0]
+    assert fake.sends == []
+
+
+def test_task_list_missing_run_id_fails_closed(
+    paths: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    t = tid("F-REAL-WORK")
+    fake = FakeOrca(
+        [card("F-REAL-WORK")],
+        dispatches={t: stale_disp(t)},
+        task_list_result={"tasks": [card("F-REAL-WORK")]},  # runId 칸 자체가 없다
+    )
+    module = with_fake(fake, monkeypatch)
+    lines = run_patrol(module, paths, times=1)
+    assert "판정=모름" in lines[0]
+    assert fake.sends == []
+
+
+def test_pending_dispatch_is_unknown_not_false_done(
+    paths: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # pending 은 done 이 아니라 모름이다 — 정상 대기로 꾸미면 거짓 정상이 된다 (중요 4).
+    t = tid("F-REAL-WORK")
+    fake = FakeOrca(
+        [card("F-REAL-WORK")],
+        dispatches={t: stale_disp(t, status="pending")},
+    )
+    module = with_fake(fake, monkeypatch)
+    lines = run_patrol(module, paths, times=1)
+    assert "판정=모름" in lines[0]
+    # pending 은 done 으로 세지 않는다 — 완료 0, 모름 1.
+    assert "건강·정체·완료·모름=0·0·0·1" in lines[0]
+    assert fake.sends == []
+
+
+# --- 9. 정확히 10분 경계 (F-RELAY-STRUCTURED-STALL-2 중요 5) -------------------
+#
+# Why: coordinator getStaleDispatches 의 권위 SQL `julianday(x) < threshold` 는 엄격
+# 미만이다. 정확히 10분은 stale 가 아니고 10분 초과만 stale 다. 현재 코드는 `>= threshold`
+# 로 올바르다. 변형 X1(`>` 로 바꾸어 정확히 10분을 stale 로 만듦)이 반드시 거부돼야 한다.
+# heartbeat=None 으로 두어 X1 이 dispatched_at 갈래를 벗어나면 stale 로 떨어지게 한다.
+
+
+def test_exact_ten_minute_boundary_is_healthy(
+    paths: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 정확히 10분 전(== 임계)은 stale 가 아니다 — `>= threshold` 가 참이다 (X1 거부용).
+    t = tid("F-REAL-WORK")
+    fake = FakeOrca(
+        [card("F-REAL-WORK")],
+        dispatches={t: disp(t, dispatched=EXACT_10MIN, heartbeat=None)},
+    )
+    module = with_fake(fake, monkeypatch)
+    lines = run_patrol(module, paths, times=1)
+    assert "판정=정상 대기" in lines[0]
+    assert fake.sends == []
+
+
+def test_over_ten_minutes_is_stale(
+    paths: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 10분 1초 전(> 임계)은 stale 다.
+    t = tid("F-REAL-WORK")
+    fake = FakeOrca(
+        [card("F-REAL-WORK")],
+        dispatches={t: disp(t, dispatched=OVER_10MIN, heartbeat=None)},
+    )
+    module = with_fake(fake, monkeypatch)
+    lines = run_patrol(module, paths, times=1)
+    assert "판정=정체" in lines[0]
+    assert len(fake.sends) == 1
+
+
+def test_under_ten_minutes_is_healthy(
+    paths: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 9분 59초 전(< 임계)은 healthy 다.
+    t = tid("F-REAL-WORK")
+    fake = FakeOrca(
+        [card("F-REAL-WORK")],
+        dispatches={t: disp(t, dispatched=UNDER_10MIN, heartbeat=None)},
+    )
+    module = with_fake(fake, monkeypatch)
+    lines = run_patrol(module, paths, times=1)
+    assert "판정=정상 대기" in lines[0]
+    assert fake.sends == []
+
+
+def test_done_dispatch_statuses_match_definition() -> None:
+    """done 은 completed/failed/circuit_broken 만. pending 은 여기 없다 (중요 3)."""
+    module = load_patrol()
+    assert module.DONE_DISPATCH_STATUSES == {"completed", "failed", "circuit_broken"}
+    assert "pending" not in module.DONE_DISPATCH_STATUSES
+
+
+# --- 단위 계약: _parse_task_list 권위 필수 검증 (X8/X9 변형 거부용) -------------
+#
+# Why: task-list 의 dispatched 카드가 dispatch_id/assignee 를 잃으면 _parse_task_list
+# 자체가 None 이어야 한다. patrol 수준에서는 dispatch-show 교차검증이 같은 누출을
+# 막아 X8/X9 변형이 가려지지만, _parse_task_list 단위에서 직접 잠가야 방어 깊이를
+# 검증한다 (중요 1·2).
+
+
+def test_parse_task_list_dispatch_id_missing_is_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = with_fake(FakeOrca([card("F-REAL-WORK", dispatch_id=None)]), monkeypatch)
+    assert module._parse_task_list(RUN) is None
+
+
+def test_parse_task_list_assignee_missing_is_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = with_fake(FakeOrca([card("F-REAL-WORK", assignee=None)]), monkeypatch)
+    assert module._parse_task_list(RUN) is None
+
+
+def test_parse_task_list_preserves_authoritative_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 정상 dispatched 카드는 task_id·dispatch_id·assignee_handle 을 모두 보존한다.
+    module = with_fake(
+        FakeOrca([card("F-REAL-WORK", dispatch_id="ctx_aabbccdd0007", assignee="term_w7")]),
+        monkeypatch,
+    )
+    parsed = module._parse_task_list(RUN)
+    assert parsed == {"active": [{"task_id": tid("F-REAL-WORK"),
+                                   "dispatch_id": "ctx_aabbccdd0007",
+                                   "assignee_handle": "term_w7"}],
+                      "resident": 0}
+
+
+
+# --- 10. 위조 taskId 형식 차단 (F-RELAY-STRUCTURED-STALL-3) -------------------
+#
+# Why: TASK_ID_RE 가 정의만 되고 쓰이지 않아, task-list 와 dispatch-show 가 같은 위조
+# taskId 를 주면 둘이 일치한다는 이유만으로 stale 보고가 나갔다. 이제 _parse_task_list
+# 와 classify_dispatch 각각이 TASK_ID_RE.fullmatch 로 권위 형식을 검사한다. 위조 ID 는
+# 모름으로 닫히고 보고 0·거짓 정상 0·예외 0 이다.
+
+
+def test_task_id_re_matches_shipped_contract() -> None:
+    """권위 taskId 형식: ^task_[0-9a-f]{8,}$ (companion/소스 실측과 같다)."""
+    module = load_patrol()
+    assert module.TASK_ID_RE.pattern == r"^task_[0-9a-f]{8,}$"
+
+
+@pytest.mark.parametrize(
+    ("task_id", "expected"),
+    [
+        ("task_a1b2c3d4", True),            # 8자리 소문자 16진수 (최소)
+        ("task_a1b2c3d4e5f6", True),        # 12자리
+        ("task_a1b2c3d4e5f60001", True),    # 긴 소문자 16진수
+        ("task_abcdef0123456789", True),    # 16자리
+        ("task_F-REAL-WORK", False),        # 비권위(대시·대문자)
+        ("task_forged", False),             # 16진수 아님
+        ("task_zzzzzzzz", False),           # g-z 범위
+        ("task_1234567", False),            # 7자리(너무 짧음)
+        ("task_", False),                   # 빈 접미
+        (" task_a1b2c3d4", False),          # 앞 공백
+        ("task_a1b2c3d4 ", False),          # 뒤 공백
+        ("task__a1b2c3d4", False),          # 밑줄 2개
+        ("Task_a1b2c3d4", False),           # 대문자 T
+        ("a1b2c3d4", False),                # 접두 없음
+        ("", False),                        # 빈 문자열
+    ],
+)
+def test_task_id_re_boundary(task_id: str, expected: bool) -> None:
+    module = load_patrol()
+    assert (module.TASK_ID_RE.fullmatch(task_id) is not None) is expected
+
+
+def test_forged_task_id_in_task_list_fails_closed(
+    paths: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # task-list 가 위조 taskId 를 주면 _parse_task_list 전체가 None 이다 → 보고 0.
+    fake = FakeOrca([card("F-REAL-WORK", task_id="task_forged")])
+    module = with_fake(fake, monkeypatch)
+    assert module._parse_task_list(RUN) is None
+    lines = run_patrol(module, paths, times=1)
+    assert "판정=모름" in lines[0]
+    assert fake.sends == []
+
+
+@pytest.mark.parametrize(
+    "forged",
+    ["task_forged", "task_zzzzzzzz", "task_1234567"],
+)
+def test_self_consistent_forged_task_id_never_escalates(
+    forged: str,
+    paths: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # task-list 와 dispatch-show 가 같은 위조 taskId 를 줘도 보고 0·거짓 정상 0·예외 0.
+    # 이것이 라운드3 의 핵심 끝단 공격이다 (재검수 중요 1).
+    fake = FakeOrca([card("F-REAL-WORK", task_id=forged)])
+    fake.dispatches = {forged: stale_disp(forged)}
+    module = with_fake(fake, monkeypatch)
+    lines = run_patrol(module, paths, times=3)
+    assert all("판정=모름" in line for line in lines)
+    assert all("거짓" not in line and "정상 대기" not in line and "유휴" not in line for line in lines)
+    assert fake.sends == []
+
+
+def test_classify_dispatch_rejects_forged_task_id_direct(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # classify_dispatch 직접 호출 경로: 위조 task_id 는 None 이다.
+    forged = "task_zzzzzzzz"
+    fake = FakeOrca([], dispatches={forged: stale_disp(forged)})
+    module = with_fake(fake, monkeypatch)
+    assert module.classify_dispatch(forged, NOW) is None
+
+
+def test_classify_dispatch_rejects_forged_dispatch_task_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 정상 task_id 로 호출해도 dispatch-show 의 task_id 가 위조면 None 이다.
+    good = tid("F-REAL-WORK")
+    forged = "task_forged"
+    fake = FakeOrca([], dispatches={good: stale_disp(forged)})
+    module = with_fake(fake, monkeypatch)
+    assert module.classify_dispatch(good, NOW) is None
+
+
+def test_classify_dispatch_rejects_task_id_mismatch_direct(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 둘 다 권위 형식이어도 task_id 가 서로 다르면 None 이다 (X3 변형 거부용).
+    # dispatch-show 의 task_id 가 호출 task_id 와 불일치하면 다른 카드의 dispatch 다.
+    a = "task_a1b2c3d4e5f60001"
+    b = "task_a1b2c3d4e5f60002"
+    fake = FakeOrca([], dispatches={a: stale_disp(b)})
+    module = with_fake(fake, monkeypatch)
+    assert module.classify_dispatch(a, NOW) is None
+
+
+def test_classify_dispatch_accepts_matching_authoritative_pair_direct(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 권위 형식 + 일치 + fresh 심박 → healthy. 정상 경로가 X3/X10/X11 에 가려지지 않는다.
+    a = tid("F-REAL-WORK")
+    fake = FakeOrca([], dispatches={a: disp(a)})
+    module = with_fake(fake, monkeypatch)
+    assert module.classify_dispatch(a, NOW)["state"] == "healthy"
+
+
+def test_authoritative_task_id_lengths_preserve_healthy_meaning(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    # 권위 8자리·12자리·긴 ID 는 기존 healthy/stale 의미를 그대로 유지한다 (중요 5).
+    import hashlib
+    paths = (tmp_path / "l.md", tmp_path / "l.json")
+    for label, hexlen in [("8자리", 8), ("12자리", 12), ("긴", 16)]:
+        h = hashlib.sha256(label.encode()).hexdigest()[:hexlen]
+        good_id = f"task_{h}"
+        fake = FakeOrca([card(label, task_id=good_id)], dispatches={good_id: disp(good_id)})
+        mod = with_fake(fake, monkeypatch)
+        lines = run_patrol(mod, paths, times=1)
+        assert "판정=정상 대기" in lines[0], f"{label}({good_id}) healthy 유지 실패"
+        assert fake.sends == []
+
+
+# --- 단위 계약: count_dispatched / is_resident_card / 상태 fail-closed ----------
 @pytest.mark.parametrize(
     ("title", "expected_resident"),
     [
@@ -393,6 +1222,7 @@ def test_resident_title_boundary(title: str | None, expected_resident: bool) -> 
     assert module.is_resident_card(card(title)) is expected_resident
 
 
+
 def test_similar_title_is_counted_as_ordinary_work(monkeypatch: pytest.MonkeyPatch) -> None:
     module = with_fake(
         FakeOrca([card("RELAY-MONITORING — ordinary feature card")]), monkeypatch
@@ -400,30 +1230,12 @@ def test_similar_title_is_counted_as_ordinary_work(monkeypatch: pytest.MonkeyPat
     assert module.count_dispatched(RUN) == (1, 0)
 
 
-def test_similar_title_does_not_suppress_escalation(
-    paths: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # 유사 제목 한 장이 상주로 잘못 빠지면 이 판은 유휴가 되어 상신이 영영 없다.
-    fake = FakeOrca([card("RELAY-MONITORING — ordinary feature card")])
-    module = with_fake(fake, monkeypatch)
-
-    lines = run_patrol(module, paths, times=3)
-
-    assert any("판정=정체" in line for line in lines)
-    assert len(fake.sends) == 1
-
 
 def test_missing_task_title_is_ordinary_work(monkeypatch: pytest.MonkeyPatch) -> None:
     # 제목을 모르는 카드는 상주가 아니다. 모를 때 일반으로 세야 정체를 숨기지 않는다.
     module = with_fake(FakeOrca([card(None)]), monkeypatch)
     assert module.count_dispatched(RUN) == (1, 0)
 
-
-# --- 5. 망가진 응답은 0이 아니라 '모름'으로 닫는다 ---------------------------
-#
-# Why (2026-08-12 독립 검수 중요 2): 검사 없이 task.get() 을 부르면 tasks=[None, 정상카드]
-# 하나에 순찰 주기가 예외로 끊기고, 모르는 status 는 조용히 (0, 0) 이 되어 거짓 유휴가
-# 된다. 두 갈래 모두 정체를 숨기는 쪽으로 틀린다.
 
 
 def test_known_task_statuses_match_the_shipped_bundle() -> None:
@@ -445,6 +1257,7 @@ def test_known_task_statuses_match_the_shipped_bundle() -> None:
     }
 
 
+
 @pytest.mark.parametrize(
     "status",
     ["pending", "ready", "completed", "failed", "blocked"],
@@ -456,9 +1269,11 @@ def test_known_non_dispatched_statuses_are_simply_not_counted(
     assert module.count_dispatched(RUN) == (0, 0)
 
 
+
 def test_null_row_in_task_list_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     module = with_fake(FakeOrca([None, card("F-REAL-WORK")]), monkeypatch)
     assert module.count_dispatched(RUN) is None
+
 
 
 def test_non_object_row_in_task_list_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -466,9 +1281,11 @@ def test_non_object_row_in_task_list_fails_closed(monkeypatch: pytest.MonkeyPatc
     assert module.count_dispatched(RUN) is None
 
 
+
 def test_task_without_status_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     module = with_fake(FakeOrca([card("F-REAL-WORK", status=None)]), monkeypatch)
     assert module.count_dispatched(RUN) is None
+
 
 
 def test_unknown_status_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -476,9 +1293,11 @@ def test_unknown_status_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     assert module.count_dispatched(RUN) is None
 
 
+
 def test_tasks_not_a_list_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     module = with_fake(FakeOrca("dispatched"), monkeypatch)
     assert module.count_dispatched(RUN) is None
+
 
 
 def test_missing_tasks_key_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -487,9 +1306,11 @@ def test_missing_tasks_key_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None
     assert module.count_dispatched(RUN) is None
 
 
+
 def test_non_object_result_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     module = with_fake(FakeOrca([], task_list_result="ok"), monkeypatch)
     assert module.count_dispatched(RUN) is None
+
 
 
 def test_empty_task_list_is_a_real_zero_not_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -497,43 +1318,6 @@ def test_empty_task_list_is_a_real_zero_not_unknown(monkeypatch: pytest.MonkeyPa
     module = with_fake(FakeOrca([]), monkeypatch)
     assert module.count_dispatched(RUN) == (0, 0)
 
-
-def test_unknown_status_does_not_suppress_escalation(
-    paths: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # 모름은 유휴가 아니다. 세지 못한 판에서도 정체는 그대로 상신돼야 한다.
-    fake = FakeOrca([card("F-REAL-WORK", status="mystery")])
-    module = with_fake(fake, monkeypatch)
-
-    lines = run_patrol(module, paths, times=3)
-
-    assert any("판정=정체" in line for line in lines)
-    assert "도는 일반 카드 모름" in lines[0]
-    assert len(fake.sends) == 1
-
-
-def test_broken_row_does_not_crash_the_patrol_cycle(
-    paths: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # 예외로 끊기면 그 주기의 감시가 통째로 사라진다. 일기 줄은 반드시 남아야 한다.
-    fake = FakeOrca([None, card("F-REAL-WORK")])
-    module = with_fake(fake, monkeypatch)
-
-    lines = run_patrol(module, paths, times=2)
-
-    assert len(lines) == 2
-    assert "도는 일반 카드 모름(상주 0장 제외)" in lines[0]
-    assert len(fake.sends) == 1
-
-
-# --- 6. status 자료형까지 fail-closed ----------------------------------------
-#
-# Why (2026-08-12 독립 재검수 중요 1): `status not in KNOWN_TASK_STATUSES` 는 해시할 수
-# 없는 값에서 비교 자체가 TypeError 다. status=[] · {} · ["dispatched"] 하나면
-# count_dispatched 가 None 으로 닫히기는커녕 예외로 빠져 patrol 의 정체 횟수 계산과
-# 상신 경로에 아예 닿지 못한다. 상시 반복 모드는 PATROL_ERROR 한 줄만 남기고 다음
-# 주기로 넘어가므로, 같은 응답이 이어지면 연속 무진행이 영영 안 쌓이고 상신은 0통이다.
-# 그래서 모르는 자료형은 모르는 값과 똑같이 '모름'으로 닫는다.
 
 
 @pytest.mark.parametrize(
@@ -560,22 +1344,6 @@ def test_non_string_or_unknown_status_fails_closed_without_raising(
     # 예외가 새면 pytest 가 그 자리에서 잡는다. None 이어야 하고, 던져서는 안 된다.
     assert module.count_dispatched(RUN) is None, label
 
-
-@pytest.mark.parametrize("status", [[], {}, ["dispatched"]])
-def test_unhashable_status_does_not_break_the_patrol_cycle(
-    status: object, paths: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """해시 불가 status 가 와도 순찰은 돌고, 진짜 정체는 그대로 한 번 상신된다."""
-    fake = FakeOrca([card("F-REAL-WORK", status=status)])
-    module = with_fake(fake, monkeypatch)
-
-    lines = run_patrol(module, paths, times=3)
-
-    assert len(lines) == 3
-    assert "도는 일반 카드 모름(상주 0장 제외)" in lines[0]
-    assert any("판정=정체" in line for line in lines)
-    assert len(fake.sends) == 1
-    assert flag(fake.sends[0], "--type") == "escalation"
 
 
 def test_unhashable_status_beside_a_healthy_card_still_fails_closed(
