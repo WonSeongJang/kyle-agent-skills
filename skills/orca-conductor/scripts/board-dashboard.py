@@ -30,6 +30,7 @@ import re
 import sqlite3
 import subprocess
 import sys
+import textwrap
 import threading
 import time
 import urllib.parse
@@ -666,6 +667,66 @@ def mail_history(limit: int) -> dict:
             }
         )
     return {"messages": messages, "limit": limit}
+
+
+def status_text(data: dict) -> str:
+    """웹과 같은 수집·판정 결과를 80칸 평문으로 보여준다."""
+    lines = [
+        f"판 현황 {data.get('collected_at', '모름')}",
+        f"살아 있는 판 {len(data.get('boards') or [])}개",
+        "",
+    ]
+
+    def add(label: str, value: str) -> None:
+        lines.extend(
+            textwrap.wrap(
+                f"{label}: {value}",
+                width=80,
+                subsequent_indent="  ",
+                break_long_words=True,
+                break_on_hyphens=False,
+            )
+            or [f"{label}:"]
+        )
+
+    for board in data.get("boards") or []:
+        add("판", str(board.get("name") or "(이름 없음)"))
+        add("run", str(board.get("run_id") or "모름"))
+
+        diag = board.get("diag") or []
+        if diag:
+            for item in diag:
+                add(f"diag {item.get('level') or '?'}", str(item.get("text") or ""))
+        else:
+            add("diag", "없음")
+
+        cards = board.get("cards")
+        if cards is None:
+            add("카드 개수", "모름")
+        else:
+            total = sum(value for value in cards.values() if isinstance(value, int))
+            counts = " ".join(f"{key}={value}" for key, value in sorted(cards.items()))
+            add("카드 개수", f"전체={total} {counts}".rstrip())
+
+        relay = board.get("relay")
+        if relay is None:
+            relay_age = "없음"
+        else:
+            relay_age = str(relay.get("age_text") or "모름")
+        add("중계기 나이", relay_age)
+        add("companion 수", str(len(board.get("companions") or [])))
+
+        gates = board.get("gates")
+        if gates is None:
+            pending = "모름"
+        else:
+            pending = str(
+                sum(1 for gate in gates if (gate.get("status") or "pending") == "pending")
+            )
+        add("pending 관문", pending)
+        lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
 
 
 class Cache:
@@ -1491,6 +1552,12 @@ def make_handler(cache: Cache):
         def do_GET(self):
             if self.path == "/" or self.path.startswith("/index"):
                 self._send(200, "text/html; charset=utf-8", PAGE.encode())
+            elif self.path == "/status.txt":
+                self._send(
+                    200,
+                    "text/plain; charset=utf-8",
+                    status_text(cache.get()).encode(),
+                )
             elif self.path.startswith("/api/status"):
                 body = json.dumps(cache.get(), ensure_ascii=False).encode()
                 self._send(200, "application/json; charset=utf-8", body)
