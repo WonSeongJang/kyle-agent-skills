@@ -36,6 +36,20 @@ TOOL_MARKERS = ("• Ran", "• Explored", "• Edited", "• Read", "• Search
 PROXY_ERRORS = ("stream disconnected", "127.0.0.1:10100", "426 Upgrade Required")
 # 연속 무진행 몇 회에서 정체로 보는가 (5분 간격 2회 = 약 10분)
 STALL_CYCLES = 2
+# 판 수명 동안 계속 dispatched 로 남는 상주 역할 카드의 이름.
+# 이 카드들은 "지금 누가 일하고 있다"가 아니라 "이 장치가 살아 있다"를 뜻하므로
+# 일반 작업 수에 세지 않는다 (2026-08-12 실측: 일반 0장인데 RELAY-MONITOR 한 장
+# 때문에 도는 카드=1 로 세어 조용한 감독을 연속 정체 5회로 오판했다).
+RESIDENT_CARD_TITLES = ("RELAY-MONITOR",)
+# 번들이 tasks.status 에 실제로 허용하는 값 전부. 추정이 아니라 실측이다 —
+# 운영 DB `orchestration.db` 의 tasks 테이블 CHECK 제약과 같다 (2026-08-12 확인):
+#   CHECK(status IN ('pending','ready','dispatched','completed','failed','blocked'))
+# 이 목록 밖 값이 오면 응답을 이해하지 못한 것이므로 0 이 아니라 '모름'으로 닫는다.
+KNOWN_TASK_STATUSES = frozenset(
+    {"pending", "ready", "dispatched", "completed", "failed", "blocked"}
+)
+# 중계기 자신의 명부 역할. 정체 상신의 발신 자리로 쓴다.
+RELAY_ROLE = "relay"
 
 
 def now_stamp() -> str:
@@ -59,7 +73,7 @@ def orca(args: list[str]) -> dict | None:
         return None
 
 
-def resolve_supervisor(project: str, board: str, run: str) -> dict | None:
+def resolve_role(project: str, board: str, run: str, role: str) -> dict | None:
     """role 이 먼저다. handle 은 행동 직전에 다시 찾는 임시 라우팅 값이다.
 
     응답 필드는 camelCase 다 (`currentHandle`, `lastSeenHandle`) — 2026-08-10 실측.
@@ -69,7 +83,7 @@ def resolve_supervisor(project: str, board: str, run: str) -> dict | None:
         [
             "roster", "resolve",
             "--project", project, "--board", board,
-            "--role", "project-supervisor", "--run", run,
+            "--role", role, "--run", run,
         ]
     )
     if not data or not data.get("ok"):
@@ -145,13 +159,72 @@ def count_tool_lines(lines: list[str]) -> int:
     return sum(1 for line in lines if any(marker in line for marker in TOOL_MARKERS))
 
 
-def count_dispatched(run: str) -> int | None:
-    """지금 실제로 도는 카드 수. 못 읽으면 None 이며 0 으로 뭉개지 않는다."""
+def is_resident_card(task: dict) -> bool:
+    """판이 끝날 때까지 dispatched 로 남는 상주 역할 카드인가.
+
+    이름 경계까지 본다. 그냥 앞머리 일치로 두면 `RELAY-MONITORING — 일반 기능 카드`
+    같은 남남인 제목까지 상주로 빠져 일반 작업이 0장으로 보인다. 그러면 진짜 정체가
+    통째로 유휴로 덮인다 — 2026-08-12 독립 검수가 이 경계로 상신 0통을 재현했다.
+    그래서 제목이 이름과 정확히 같거나, 이름 뒤에 하이픈이 붙은 경우만 상주로 본다.
+
+    제목으로만 가른다. assignee handle 은 순찰마다 바뀔 수 있는 임시 라우팅 값이라
+    상주 여부의 근거로 쓰면 handle 이 재발급되는 순간 판정이 뒤집힌다.
+    """
+    title = str(task.get("task_title") or "").strip()
+    return any(
+        title == name or title.startswith(f"{name}-") for name in RESIDENT_CARD_TITLES
+    )
+
+
+def count_dispatched(run: str) -> tuple[int, int] | None:
+    """(일반 작업 카드 수, 상주 카드 수). 못 읽으면 None 이며 0 으로 뭉개지 않는다.
+
+    상주 카드는 "일하는 사람"이 아니라 "살아 있는 장치"다. 둘을 한 숫자로 합치면
+    일반 작업이 0장인 조용한 감독이 정체로 보인다 — 2026-08-12 오탐이 정확히 그것이다.
+    그래서 합치지 않고 둘 다 돌려주고, 일기에도 둘 다 적는다.
+
+    응답 모양은 믿지 않고 껍질부터 하나씩 확인한다 — result 객체, tasks 목록, 각 행이
+    객체인지, status 가 번들이 실제로 쓰는 값인지. 하나라도 어긋나면 그 자리에서 None
+    이다. 검사 없이 `task.get(...)` 을 부르면 `tasks=[None, 정상카드]` 하나에 순찰
+    주기가 예외로 끊기고, 모르는 status 는 조용히 (0, 0) 이 되어 거짓 유휴가 된다.
+    둘 다 정체를 숨기는 쪽으로 틀리므로 모름으로 닫는 것이 유일하게 안전한 기본값이다.
+    """
     data = orca(["orchestration", "task-list", "--run", run])
     if not data or not data.get("ok"):
         return None
-    tasks = data.get("result", {}).get("tasks") or []
-    return sum(1 for task in tasks if task.get("status") == "dispatched")
+    result = data.get("result")
+    if not isinstance(result, dict):
+        return None
+    tasks = result.get("tasks")
+    # 성공 응답은 항상 tasks 배열을 준다(빈 판이면 빈 배열). 목록이 아니면 모르는 모양이다.
+    if not isinstance(tasks, list):
+        return None
+    active = 0
+    resident = 0
+    for task in tasks:
+        if not isinstance(task, dict):
+            return None
+        status = task.get("status")
+        # 자료형부터 본다. `in frozenset` 은 해시할 수 없는 값에서 비교 자체가
+        # TypeError 라, status=[] · {} · ["dispatched"] 하나에 순찰 주기가 통째로
+        # 예외로 끊긴다 — 정체 횟수도 안 쌓이고 상신도 0통이 된다 (2026-08-12 재검수 실측).
+        # 모르는 자료형은 모르는 값과 똑같이 '모름'으로 닫는다.
+        if not isinstance(status, str) or status not in KNOWN_TASK_STATUSES:
+            return None
+        if status != "dispatched":
+            continue
+        if is_resident_card(task):
+            resident += 1
+        else:
+            active += 1
+    return active, resident
+
+
+def error_code(result: dict | None) -> str:
+    """실패 원문에서 코드만 뽑는다. 원인 없는 '실패'는 다음 사람이 못 고친다."""
+    if result is None:
+        return "cli_no_output"
+    return str((result.get("error") or {}).get("code") or "unknown")
 
 
 def recover_proxy(tail_text: str) -> str | None:
@@ -169,7 +242,7 @@ def patrol(project: str, board: str, run: str, log_path: Path, state_path: Path)
     state = load_state(state_path)
     stamp = now_stamp()
 
-    member = resolve_supervisor(project, board, run)
+    member = resolve_role(project, board, run, "project-supervisor")
     if member is None:
         append_log(
             log_path,
@@ -210,11 +283,17 @@ def patrol(project: str, board: str, run: str, log_path: Path, state_path: Path)
         basis = f"애매(새 줄 {returned}, 도구 줄 {tool_lines}) → 모델 판정"
 
     # --- 유휴와 정체를 가른다 (2026-08-10 오탐 실측) ---
-    # 도는 카드가 0개면 감독이 조용한 것은 정상이다. 옛 luna 중계기는 이 구분이 없어
+    # 도는 일반 작업이 0개면 감독이 조용한 것은 정상이다. 옛 luna 중계기는 이 구분이 없어
     # 정당한 유휴를 "no_progress_cycles=16" 으로 쌓아 거짓 정체를 신고했다.
-    dispatched = count_dispatched(run)
-    if verdict == "정체" and dispatched == 0:
-        verdict, basis = "유휴", f"{basis} — 다만 도는 카드 0개라 조용한 것이 정상이다"
+    # 2026-08-12: 상주 카드(RELAY-MONITOR)를 같이 세어 같은 오탐이 다시 났다.
+    # 못 읽었으면(None) 0 으로 뭉개지 않고 정체 판정을 그대로 둔다 — fail-closed.
+    counts = count_dispatched(run)
+    active, resident = counts if counts is not None else (None, 0)
+    if verdict == "정체" and active == 0:
+        verdict, basis = (
+            "유휴",
+            f"{basis} — 다만 도는 일반 카드 0개(상주 {resident}장 제외)라 조용한 것이 정상이다",
+        )
 
     # --- 연속 무진행 세기 ---
     cycles = int(state.get("no_progress_cycles", 0))
@@ -229,25 +308,40 @@ def patrol(project: str, board: str, run: str, log_path: Path, state_path: Path)
     proxy_action = recover_proxy(tail_text)
 
     # --- 정체 보고: 같은 정체에 대해 딱 한 번 ---
+    #
+    # 발신 자리(--from)를 반드시 붙인다. 이 순찰기는 launchd 가 띄운 PPID=1 데몬이라
+    # ORCA_TERMINAL_HANDLE 도, 붙어 있는 터미널도 없다. --from 없이 부르면 번들 CLI 가
+    # 발신자를 정하지 못해 `no_active_sender_terminal` 로 거절하고, 우편은 한 통도
+    # 나가지 않는다 — 2026-08-12 정체 상신 8회 연속 실패의 원인이 정확히 이것이다.
+    # 발신 자리는 중계기 자신의 명부 역할에서 행동 직전에 다시 찾는다.
     action = proxy_action or "없음"
     if cycles >= STALL_CYCLES and not state.get("stall_escalation_id"):
-        sent = orca(
-            [
-                "orchestration", "send",
-                "--to", f"run:{run}",
-                "--subject", f"supervisor_stall:{handle}",
-                "--body",
-                f"감독 화면에 연속 {cycles}회 진행 증거가 없다. 판정 근거: {basis}. "
-                f"모델 판정: {verdict}{(' / ' + judge_note) if judge_note else ''}. "
-                f"cursor={latest}, Context={ctx}%. 이 정체에 대해 한 번만 보고한다.",
-            ]
-        )
-        if sent and sent.get("ok"):
-            msg_id = (sent.get("result", {}).get("message") or {}).get("id", "sent")
-            state["stall_escalation_id"] = msg_id
-            action = f"escalation 1회({msg_id})"
+        relay = resolve_role(project, board, run, RELAY_ROLE)
+        if relay is None:
+            # 발신 자리를 모르면 보내지 않는다. 성공으로 적지 않으므로 다음 순찰에 다시 온다.
+            action = f"escalation 보류 — 발신 자리(role={RELAY_ROLE})를 못 찾았다. 다음 순찰에 재시도"
         else:
-            action = "escalation 발송 실패 — 다음 순찰에 재시도"
+            sent = orca(
+                [
+                    "orchestration", "send",
+                    "--from", relay["handle"],
+                    "--to", f"run:{run}",
+                    "--type", "escalation",
+                    "--subject", f"supervisor_stall:{handle}",
+                    "--body",
+                    f"감독 화면에 연속 {cycles}회 진행 증거가 없다. 판정 근거: {basis}. "
+                    f"모델 판정: {verdict}{(' / ' + judge_note) if judge_note else ''}. "
+                    f"cursor={latest}, Context={ctx}%. 이 정체에 대해 한 번만 보고한다.",
+                ]
+            )
+            if sent and sent.get("ok"):
+                msg_id = (sent.get("result", {}).get("message") or {}).get("id", "sent")
+                state["stall_escalation_id"] = msg_id
+                action = f"escalation 1회({msg_id})"
+            else:
+                # 실패는 성공으로 적지 않는다. stall_escalation_id 를 남기지 않으므로
+                # 같은 정체가 이어지면 다음 순찰이 그대로 다시 시도한다.
+                action = f"escalation 발송 실패({error_code(sent)}) — 다음 순찰에 재시도"
 
     state.update(
         {
@@ -264,7 +358,8 @@ def patrol(project: str, board: str, run: str, log_path: Path, state_path: Path)
         f"{stamp} | patrol | supervisor {handle} ({member.get('model')}, "
         f"agentState={member.get('agent_state')}) cursor {last_cursor}→{latest}, "
         f"새 출력 {returned}줄, 도구 실행 줄 {tool_lines}, "
-        f"Context {prev_ctx}%→{ctx if ctx is not None else '변화없음'}, 도는 카드 {dispatched} "
+        f"Context {prev_ctx}%→{ctx if ctx is not None else '변화없음'}, "
+        f"도는 일반 카드 {active if active is not None else '모름'}(상주 {resident}장 제외) "
         f"| 판정={verdict} ({basis}){(' | 모델원문=' + judge_note) if judge_note else ''} "
         f"| 연속무진행={cycles} | 조치={action}",
     )

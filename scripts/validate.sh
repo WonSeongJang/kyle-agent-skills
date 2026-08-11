@@ -148,6 +148,13 @@ export ORCA_TEST_LEDGER_TOKEN="tok-validate-$(date +%s)-$$"
 : > "$ORCA_TEST_LEDGER"
 bash "$REPO_ROOT/scripts/check-test-registration.sh" --declare "$ORCA_TEST_DIR" "$0"
 
+# 헤드리스 중계기 순찰 회귀(2026-08-12 F-RELAY-RESIDENT-COUNT). 상주 카드(RELAY-MONITOR)를
+# 일반 작업 수에 세면 조용한 감독이 정체로 오판되고, 정체 상신에 발신 자리(--from)가 빠지면
+# 데몬 환경에서 no_active_sender_terminal 로 한 통도 안 나간다. 둘 다 실제로 겪은 사고라
+# 이 관문에서 계약으로 잠근다. 우편은 전부 격리 fixture 로만 흉내 낸다.
+bash "$REPO_ROOT/scripts/run-registered-test.sh" pytest \
+  "$SKILL_ROOT/scripts/tests/test_relay_patrol.py"
+
 bash "$REPO_ROOT/scripts/run-registered-test.sh" pytest \
   "$SKILL_ROOT/scripts/tests/test_select_routing_pair.py" \
   "$SKILL_ROOT/scripts/tests/test_routing_shadow.py" \
