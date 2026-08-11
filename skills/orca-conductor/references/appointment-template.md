@@ -97,11 +97,28 @@ mechanics.md의 `ORCA_BIN=<명시 override 또는 PATH 자동 탐색>` 표현이
 > push · origin 병합 · 배포 · 삭제 · 마이그레이션은 네 권한이 아니다.
 > 필요하면 결정 관문으로 슈퍼감독에게 올린다. 삭제는 `rm` 대신 `.staging/` 이동이 기본이다.
 
+## 9. 카드 정산 때 성적 원장 한 줄 (2026-08-11 kyle 요청 — 실행기 성적을 데이터로)
+
+> 카드를 완료·실패로 정산하는 같은 턴에 공용 헬퍼로 `card_outcome` 한 줄을 남긴다. 손 JSON 금지 — 헬퍼만
+> 쓴다(키가 갈라지면 합쳐 읽을 때 한쪽이 통째로 안 보인다).
+>
+> ```
+> skills/orca-conductor/scripts/routing-ledger-append.sh card_outcome <판이름> <taskId> \
+>   '{"role":"developer|reviewer|researcher","runner":"codex|omo|claude","provider":"...","model":"...","effort":"...",
+>     "verdict":"CODE_PASS|CODE_FAIL|무효|측정못함","review_rounds":N,"critical":N,"important":N,"minor":N,"duration_min":N}'
+> ```
+>
+> `duration_min`은 발령부터 정산까지다. 모르는 값은 빼지 말고 `null`로 적는다(모름을 0으로 뭉개지 않는다).
+> 작업자 카드와 검수 카드 각각 한 줄씩이다.
+
+근거: 2026-08-11 kyle — "omo 작업 성과를 체감이 아니라 데이터로 보고 싶다." 첫 기록은 판
+dashboard-single-source-1의 M1(omo·gpt-5.6-sol·medium, 검수 1라운드 CODE_PASS)이다.
+
 ---
 
 ## 발부 전 자기 점검
 
-임명장을 보내기 전에 위 9개가 **문장으로** 들어갔는지 센다. 참조 링크만 걸어두는 것은 통과가 아니다 —
+임명장을 보내기 전에 위 10개가 **문장으로** 들어갔는지 센다. 참조 링크만 걸어두는 것은 통과가 아니다 —
 2026-07-27 박제가 실패한 방식이 정확히 그것이었다(기록에는 있고 감독이 읽는 문서에는 없음).
 
 ## 되풀이되는 실패 한 가지 — 규칙이 행위자에게 안 닿는다
