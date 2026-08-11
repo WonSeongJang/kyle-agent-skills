@@ -552,6 +552,8 @@ def routing_view() -> dict:
 # 규칙 표면 — 사람(화면)과 에이전트(curl)가 같은 규칙 원본을 본다 (2026-08-11 kyle:
 # "규칙들도 화면/curl/sh로 명확히 확인할 수 있게"). 복제하지 않는다 — 원본 파일을 렌더링만 한다.
 RULE_SOURCES = [
+    ("★ 공통 장비 표준 — 0절 삼표면 원칙 포함 (mechanics)",
+     Path.home() / "Dev/kyle-agent-skills/skills/orca-conductor/references/mechanics.md"),
     ("임명장 필수 문구 (감독이 지키는 규칙)",
      Path.home() / "Dev/kyle-agent-skills/skills/orca-conductor/references/appointment-template.md"),
     ("라우팅 정책·상시 결정",
