@@ -9,7 +9,7 @@
     },
     "라우팅 대상 아님 — 상시 결정(슈퍼 또는 kyle)": {
       "project-supervisor": "감독. 판정 역할이므로 developer 계열에서 고르지 않는다. 품질 높은 판정 계열에서 낮은~중간 노력.",
-      "relay": "중계기. 상시 결정(luna). 순찰이라 소모가 크므로 낮은 노력.",
+      "relay": "중계기. 상시 결정 luna high (2026-08-11 kyle — low 중계기 폐지).",
       "companion": "셸 스크립트. 모델 자체가 없다.",
       "kicker": "셸 스크립트. 모델 자체가 없다."
     },
@@ -186,14 +186,14 @@
           "role": "developer",
           "effort": "high",
           "quality": 86,
-          "enabled": false,
           "harness": "codex",
           "taskClassPrior": {
             "security": 4,
             "concurrency": 4,
             "bugfix": 3
           },
-          "command": "codex -p orca --model gpt-5.6-terra -c model_reasoning_effort=\"high\""
+          "command": "codex -p orca --model gpt-5.6-terra -c model_reasoning_effort=\"high\"",
+          "note": "조사(읽기 전용) 후보로 재활성 (2026-08-11 kyle)"
         },
         {
           "id": "gpt-5.6-luna",
@@ -313,7 +313,6 @@
           "role": "developer",
           "effort": "high",
           "quality": 86,
-          "enabled": false,
           "taskClassPrior": {
             "security": 4,
             "concurrency": 4,
@@ -321,7 +320,7 @@
           },
           "harness": "omo",
           "command": "omo --model openai-codex/gpt-5.6-terra --thinking high --no-recommended-models",
-          "note": "codex 가 막힐 때 쓰는 같은 모델의 다른 실행기. --no-recommended-models 는 필수(없으면 kimi-k3 로 갈아탐). 검증은 --mode json 의 message.provider/model. 상세: conductor/references/agent-runners.json"
+          "note": "codex 가 막힐 때 쓰는 같은 모델의 다른 실행기. --no-recommended-models 는 필수(없으면 kimi-k3 로 갈아탐). 검증은 --mode json 의 message.provider/model. 상세: conductor/references/agent-runners.json | 조사(읽기 전용) 후보로 재활성 (2026-08-11 kyle)"
         },
         {
           "id": "gpt-5.6-luna",
