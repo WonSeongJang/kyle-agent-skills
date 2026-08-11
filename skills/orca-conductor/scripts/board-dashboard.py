@@ -582,15 +582,31 @@ def rules_view() -> dict:
     return {"docs": docs}
 
 
-def rules_txt() -> str:
-    out = ["# 규칙 표면 — 원본 파일 렌더링 (수정은 원본에서만)", ""]
-    for doc in rules_view()["docs"]:
-        out.append(f"{'=' * 60}")
-        out.append(f"## {doc['title']}")
-        out.append(f"원본: {doc['path']} (수정 {doc.get('mtime', '모름')})")
-        out.append("")
-        out.append(doc.get("text") or doc.get("error", "모름"))
-        out.append("")
+def rules_txt(want: str | None = None) -> str:
+    """기본은 목차만 — 필요한 문서만 ?doc=<이름 일부>로 받는다 (2026-08-11 kyle:
+    "필요한 것만 받아야지" — 전문 일괄은 77KB라 에이전트 토큰 낭비)."""
+    docs = rules_view()["docs"]
+    if want:
+        w = want.lower()
+        hits = [d for d in docs if w in d["title"].lower() or w in d["path"].lower()]
+        if not hits:
+            names = " | ".join(d["path"].rsplit("/", 1)[-1] for d in docs)
+            return f"doc='{want}' 일치 없음. 후보: {names}\n"
+        out = []
+        for doc in hits:
+            out.append(f"## {doc['title']}")
+            out.append(f"원본: {doc['path']} (수정 {doc.get('mtime', '모름')})")
+            out.append("")
+            out.append(doc.get("text") or doc.get("error", "모름"))
+        return "\n".join(out)
+    out = ["# 규칙 표면 — 목차 (전문은 /rules.txt?doc=<파일명 일부> 로 필요한 것만)", ""]
+    for doc in docs:
+        size = len(doc.get("text") or "")
+        fname = doc["path"].rsplit("/", 1)[-1]
+        out.append(f"- {doc['title']}")
+        out.append(f"  doc={fname} · {size:,}자 · 수정 {doc.get('mtime', '모름')}")
+    out.append("")
+    out.append("예: curl -s 'http://127.0.0.1:8787/rules.txt?doc=mechanics'  (삼표면 원칙은 여기 0절)")
     return "\n".join(out)
 
 
@@ -1777,7 +1793,9 @@ def make_handler(cache: Cache):
                 body = json.dumps(rules_view(), ensure_ascii=False).encode()
                 self._send(200, "application/json; charset=utf-8", body)
             elif self.path.startswith("/rules.txt"):
-                self._send(200, "text/plain; charset=utf-8", rules_txt().encode())
+                query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                want = (query.get("doc") or [None])[0]
+                self._send(200, "text/plain; charset=utf-8", rules_txt(want).encode())
             else:
                 self._send(404, "text/plain; charset=utf-8", b"not found")
 
