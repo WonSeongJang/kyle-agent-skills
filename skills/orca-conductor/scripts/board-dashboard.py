@@ -549,6 +549,49 @@ def routing_view() -> dict:
     return out
 
 
+# 규칙 표면 — 사람(화면)과 에이전트(curl)가 같은 규칙 원본을 본다 (2026-08-11 kyle:
+# "규칙들도 화면/curl/sh로 명확히 확인할 수 있게"). 복제하지 않는다 — 원본 파일을 렌더링만 한다.
+RULE_SOURCES = [
+    ("임명장 필수 문구 (감독이 지키는 규칙)",
+     Path.home() / "Dev/kyle-agent-skills/skills/orca-conductor/references/appointment-template.md"),
+    ("라우팅 정책·상시 결정",
+     Path.home() / "Dev/kyle-agent-skills/skills/orca-conductor/references/routing-providers.json"),
+    ("실행기(runner)별 함정과 검증법",
+     Path.home() / "Dev/kyle-agent-skills/skills/conductor/references/agent-runners.json"),
+]
+
+
+def rules_view() -> dict:
+    docs = []
+    for title, path in RULE_SOURCES:
+        entry: dict = {"title": title, "path": str(path)}
+        try:
+            text = path.read_text(encoding="utf-8")
+            entry["mtime"] = time.strftime("%Y-%m-%d %H:%M", time.localtime(path.stat().st_mtime))
+            if path.suffix == ".json":
+                d = json.loads(text)
+                keep = {k: v for k, v in d.items() if k.startswith("_")}
+                entry["text"] = json.dumps(keep, ensure_ascii=False, indent=1)
+            else:
+                entry["text"] = text
+        except (OSError, ValueError) as e:
+            entry["error"] = f"못 읽음: {e}"  # 없음이 아니라 모름
+        docs.append(entry)
+    return {"docs": docs}
+
+
+def rules_txt() -> str:
+    out = ["# 규칙 표면 — 원본 파일 렌더링 (수정은 원본에서만)", ""]
+    for doc in rules_view()["docs"]:
+        out.append(f"{'=' * 60}")
+        out.append(f"## {doc['title']}")
+        out.append(f"원본: {doc['path']} (수정 {doc.get('mtime', '모름')})")
+        out.append("")
+        out.append(doc.get("text") or doc.get("error", "모름"))
+        out.append("")
+    return "\n".join(out)
+
+
 # kyle 메모함 — 대시보드의 유일한 쓰기 경로. 판 카드를 직접 만들지 않는 이유:
 # 카드는 감독이 단일 작성자다. 여기 쌓인 메모는 슈퍼감독이 읽고 알맞은 저장소
 # TODO 나 판 지시로 분배한다 (2026-08-11 kyle 요청).
@@ -987,6 +1030,7 @@ function renderSide() {
   item("terms", "터미널", DATA.terminals.length);
   item("ledger", "원장 (DB)");
   item("routing", "라우팅");
+  item("rules", "규칙");
   item("memo", "메모함", MEMOS ? MEMOS.items.length : undefined);
   side.appendChild(el("div", "navsec", "살아있는 판"));
   for (const b of DATA.boards) {
@@ -1600,6 +1644,38 @@ async function pageRouting(main) {
   }
 }
 
+// 규칙 표면 — 원본 파일 렌더링. 에이전트는 curl /rules.txt 로 같은 것을 본다.
+let RULES = null;
+async function pageRules(main) {
+  if (RULES === null) {
+    try { RULES = await (await fetch("/api/rules")).json(); }
+    catch (e) { RULES = { docs: [], error: String(e) }; }
+    render();
+    return;
+  }
+  const head = el("div", "card");
+  head.appendChild(el("h2", null, "규칙 표면"));
+  head.appendChild(el("div", "dim row",
+    "사람은 이 화면, 에이전트는 curl -s http://127.0.0.1:8787/rules.txt — 같은 원본이다. 수정은 원본 파일에서만."));
+  main.appendChild(head);
+  for (const doc of RULES.docs || []) {
+    const card = el("div", "card");
+    card.appendChild(el("h3", null, doc.title));
+    card.appendChild(el("div", "dim row", doc.path + "  (수정 " + (doc.mtime || "모름") + ")"));
+    if (doc.error) { card.appendChild(el("div", "bad row", "⚠ " + doc.error)); main.appendChild(card); continue; }
+    const pre = el("pre");
+    pre.style.whiteSpace = "pre-wrap";
+    pre.style.fontSize = "12px";
+    pre.textContent = doc.text || "";
+    const wrap = el("div", "scroll");
+    wrap.style.maxHeight = "60vh";
+    wrap.style.overflowY = "auto";
+    wrap.appendChild(pre);
+    card.appendChild(det("rule-" + doc.title, "펼쳐 보기", wrap));
+    main.appendChild(card);
+  }
+}
+
 function render() {
   renderSide();
   const main = $("main");
@@ -1615,6 +1691,7 @@ function render() {
   else if (r.page === "dormant") pageDormant(main);
   else if (r.page === "memo") pageMemo(main);
   else if (r.page === "routing") pageRouting(main);
+  else if (r.page === "rules") pageRules(main);
   else pageOverview(main);
   window.scrollTo(0, scrollY);
 }
@@ -1694,6 +1771,11 @@ def make_handler(cache: Cache):
             elif self.path.startswith("/api/routing"):
                 body = json.dumps(routing_view(), ensure_ascii=False).encode()
                 self._send(200, "application/json; charset=utf-8", body)
+            elif self.path.startswith("/api/rules"):
+                body = json.dumps(rules_view(), ensure_ascii=False).encode()
+                self._send(200, "application/json; charset=utf-8", body)
+            elif self.path.startswith("/rules.txt"):
+                self._send(200, "text/plain; charset=utf-8", rules_txt().encode())
             else:
                 self._send(404, "text/plain; charset=utf-8", b"not found")
 
