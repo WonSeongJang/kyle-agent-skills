@@ -1542,8 +1542,13 @@ async function pageRouting(main) {
   if (ROUTING.error) head.appendChild(el("div", "bad row", "⚠ " + ROUTING.error));
   for (const p of ROUTING.policies || []) {
     const box = el("div", "row");
-    box.appendChild(el("span", "tag who", p.key.replace("_", "")));
-    box.appendChild(el("span", null, " " + (p["내용"] || "") + (p["확정"] ? "  (" + p["확정"] + ")" : "")));
+    box.appendChild(el("span", "tag who", p.key.replace("_", "") + (p["확정"] ? " · " + p["확정"] : "")));
+    const ul = el("div");
+    for (const [k, v] of Object.entries(p)) {
+      if (k === "key" || k === "확정") continue;
+      ul.appendChild(el("div", null, "· " + (k === "내용" ? "" : k + ": ") + String(v)));
+    }
+    box.appendChild(ul);
     head.appendChild(box);
   }
   main.appendChild(head);
