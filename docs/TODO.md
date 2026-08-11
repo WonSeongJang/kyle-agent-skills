@@ -172,3 +172,13 @@ bash scripts/validate.sh
   - `test-relay-shadow.sh:118` — `wc -l < "$state_dir/shadow.log"`
   - `test-relay-shadow.sh:738,741,745,748` — `cat "$state_dir/shadow-state.json"`
   (나머지 `open(sys.argv[N])` 다수는 그 시험이 방금 직접 쓴 JSON을 되읽는 자리라 같은 부류가 아니다 — 없으면 그것 자체가 진짜 결함이다.)
+
+
+## 스킬·장황 문서를 표면 원칙 기반으로 재정리 (2026-08-11 kyle)
+
+**Why**: 규칙이 장황한 문서 속에만 있으면 행위자에게 닿지 않는다. mechanics.md 0절(삼표면 원칙 — 원본 파일 1 + 사람 화면 1 + 에이전트 창구 1)이 확정됐으므로, 기존 스킬 문서들(orca-conductor SKILL.md·references 전체, super-conductor)도 이 기준으로 재정리한다.
+
+- 각 문서에 대해: 어느 원본으로 합치고, 어느 표면(대시보드 탭/curl/sh)으로 노출할지 정한다
+- 장황한 산문 규칙 → 기계가 읽는 원본(JSON/구조화 md) + 표면 등록으로 승격
+- omo-deep-analysis-1 산출물이 나오면 그 개념들도 같은 틀로 편입 (RULE_SOURCES 한 줄 추가 방식)
+- 착수 시점: omo 분석 판 완료 후 새 판 후보
