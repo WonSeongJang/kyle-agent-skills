@@ -520,6 +520,35 @@ LEDGER_DB = next((p for p in LEDGER_CANDIDATES if p.exists()), LEDGER_CANDIDATES
 LEDGER_ROW_LIMIT = 200
 LEDGER_CELL_MAX = 400
 
+# 라우팅 보기 — 점수·가산점·쿼터를 눈으로 봐야 kyle 이 수정 판단을 할 수 있다 (2026-08-11).
+# 읽기 전용이다: 정책 수정은 사람이 routing-providers.json 을 고치는 것이지 화면이 아니다.
+ROUTING_FILE = Path.home() / "Dev/kyle-agent-skills/skills/orca-conductor/references/routing-providers.json"
+QUOTA_FILE = Path.home() / ".cache/rottie/routing-usage.json"
+
+
+def routing_view() -> dict:
+    out: dict = {"file": str(ROUTING_FILE), "providers": None, "policies": [], "quota": None,
+                 "quota_age_sec": None, "error": None}
+    try:
+        d = json.loads(ROUTING_FILE.read_text(encoding="utf-8"))
+        out["providers"] = d.get("providers")
+        out["policies"] = [
+            {"key": k, **(v if isinstance(v, dict) else {"내용": str(v)})}
+            for k, v in d.items() if k.startswith("_정책")
+        ]
+    except (OSError, ValueError) as e:
+        out["error"] = f"라우팅 원본을 못 읽었다: {e}"
+    try:
+        q = json.loads(QUOTA_FILE.read_text(encoding="utf-8"))
+        out["quota"] = q.get("reports")
+        gen = q.get("generatedAt")
+        if gen:
+            out["quota_age_sec"] = max(0, time.time() - gen / 1000)
+    except (OSError, ValueError):
+        out["quota"] = None  # 없음이 아니라 못 읽음 — 화면에서 '모름'으로 표시
+    return out
+
+
 # kyle 메모함 — 대시보드의 유일한 쓰기 경로. 판 카드를 직접 만들지 않는 이유:
 # 카드는 감독이 단일 작성자다. 여기 쌓인 메모는 슈퍼감독이 읽고 알맞은 저장소
 # TODO 나 판 지시로 분배한다 (2026-08-11 kyle 요청).
@@ -957,6 +986,7 @@ function renderSide() {
   item("mail", "우편함", DATA.messages === null ? "?" : DATA.messages.length);
   item("terms", "터미널", DATA.terminals.length);
   item("ledger", "원장 (DB)");
+  item("routing", "라우팅");
   item("memo", "메모함", MEMOS ? MEMOS.items.length : undefined);
   side.appendChild(el("div", "navsec", "살아있는 판"));
   for (const b of DATA.boards) {
@@ -1496,6 +1526,75 @@ async function pageMemo(main) {
   main.appendChild(card);
 }
 
+// 라우팅 보기 — 읽기 전용. 정책 수정은 routing-providers.json 파일이지 화면이 아니다.
+let ROUTING = null;
+async function pageRouting(main) {
+  if (ROUTING === null) {
+    try { ROUTING = await (await fetch("/api/routing")).json(); }
+    catch (e) { ROUTING = { error: String(e) }; }
+    render();
+    return;
+  }
+  const head = el("div", "card");
+  head.appendChild(el("h2", null, "라우팅 편성표"));
+  head.appendChild(el("div", "dim row",
+    "점수는 모델×역할×노력 묶음 단위. 수정은 화면이 아니라 원본 파일에서: " + (ROUTING.file || "")));
+  if (ROUTING.error) head.appendChild(el("div", "bad row", "⚠ " + ROUTING.error));
+  for (const p of ROUTING.policies || []) {
+    const box = el("div", "row");
+    box.appendChild(el("span", "tag who", p.key.replace("_", "")));
+    box.appendChild(el("span", null, " " + (p["내용"] || "") + (p["확정"] ? "  (" + p["확정"] + ")" : "")));
+    head.appendChild(box);
+  }
+  main.appendChild(head);
+
+  const quotaByKey = {};
+  for (const q of ROUTING.quota || []) quotaByKey[q.provider] = q.quota || {};
+  const qAge = ROUTING.quota_age_sec;
+
+  for (const prov of ROUTING.providers || []) {
+    const card = el("div", "card");
+    const h = el("h3", null, prov.id + "  ·  주간 예약선 " + (prov.weeklyReservePercent ?? "?") + "%");
+    card.appendChild(h);
+    const q = quotaByKey[prov.quotaKey || prov.id];
+    if (q) {
+      const bits = [];
+      if (q.fiveHourPercent !== undefined) bits.push("5시간 " + q.fiveHourPercent + "%");
+      if (q.weeklyPercent !== undefined) bits.push("주간 " + q.weeklyPercent + "%");
+      card.appendChild(el("div", "dim row", "쿼터: " + (bits.join(" · ") || "값 없음")
+        + (qAge !== null && qAge !== undefined ? "  (수집 " + Math.round(qAge / 60) + "분 전)" : "  (수집 시각 모름)")));
+    } else {
+      card.appendChild(el("div", "dim row", "쿼터: 모름 (수집 안 됨)"));
+    }
+    const table = el("table");
+    const hd = el("tr");
+    for (const c of ["모델", "역할", "노력", "점수", "상태", "가산점(taskClassPrior)"])
+      hd.appendChild(el("th", "dim", c));
+    table.appendChild(hd);
+    for (const m of prov.models || []) {
+      const tr = el("tr");
+      const off = m.enabled === false;
+      tr.appendChild(el("td", "mono" + (off ? " dim" : ""), m.id || ""));
+      tr.appendChild(el("td", off ? "dim" : "", m.role || ""));
+      tr.appendChild(el("td", off ? "dim" : "", m.effort || ""));
+      const qcell = el("td", off ? "dim" : "ok", String(m.quality ?? "?"));
+      tr.appendChild(qcell);
+      let st = off ? "꺼짐" : "";
+      if (m.experimental) st += (st ? " · " : "") + "실험 " + (m.experimentSharePercent ?? "?") + "%";
+      if (m.lastResortOnly) st += (st ? " · " : "") + "최후수단";
+      tr.appendChild(el("td", off ? "bad" : "warn", st));
+      const pri = m.taskClassPrior || {};
+      const ptxt = Object.entries(pri).map(([k, v]) => k + (v >= 0 ? "+" : "") + v).join("  ");
+      tr.appendChild(el("td", "dim", ptxt || "—"));
+      table.appendChild(tr);
+    }
+    const wrap = el("div", "scroll");
+    wrap.appendChild(table);
+    card.appendChild(wrap);
+    main.appendChild(card);
+  }
+}
+
 function render() {
   renderSide();
   const main = $("main");
@@ -1510,6 +1609,7 @@ function render() {
   else if (r.page === "ledger") pageLedger(main, r.id);
   else if (r.page === "dormant") pageDormant(main);
   else if (r.page === "memo") pageMemo(main);
+  else if (r.page === "routing") pageRouting(main);
   else pageOverview(main);
   window.scrollTo(0, scrollY);
 }
@@ -1585,6 +1685,9 @@ def make_handler(cache: Cache):
                 self._send(200, "application/json; charset=utf-8", body)
             elif self.path.startswith("/api/memo"):
                 body = json.dumps(memo_list(), ensure_ascii=False).encode()
+                self._send(200, "application/json; charset=utf-8", body)
+            elif self.path.startswith("/api/routing"):
+                body = json.dumps(routing_view(), ensure_ascii=False).encode()
                 self._send(200, "application/json; charset=utf-8", body)
             else:
                 self._send(404, "text/plain; charset=utf-8", b"not found")
