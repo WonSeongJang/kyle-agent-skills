@@ -46,6 +46,17 @@ DISPATCH_STALE_SEC = 10 * 60
 # 일반 작업 수에 세지 않는다 (2026-08-12 실측: 일반 0장인데 RELAY-MONITOR 한 장
 # 때문에 도는 카드=1 로 세어 조용한 감독을 연속 정체 5회로 오판했다).
 RESIDENT_CARD_TITLES = ("RELAY-MONITOR",)
+# 카드 제목 앞에 붙는 판 식별자. 표준 계약이다 — SKILL.md:154 "spec은 항상
+# `[판:<판이름>]` 접두사로 시작", mechanics.md 판 식별자 절. 장부가 런타임 전역 공유라
+# 다중 세션 지휘에서 카드를 가르려고 붙인다. 상주 카드도 같은 계약을 따르므로 상주
+# 판정 전에 이 접두사 **한 개**만 떼고 본다 (2026-08-12 실측: 살아 있는 카드는
+# `RELAY-MONITOR-mailbox-relay-1`(접두사 없음)이지만 같은 판의 일반 카드는 전부
+# `[판:mailbox-relay-1] …` 형태라, 표준대로 지은 새 판의 상주 카드
+# `[판:quota-collection-1] RELAY-MONITOR-quota-collection-1` 은 상주로 안 빠지고
+# 일반 카드로 세어졌다 — 그 카드의 dispatch 는 판 내내 심박 없는 dispatched 라
+# 그대로 stale 로 분류돼, 조용한 감독을 오판하고 자기 감시 카드로 거짓 정체 상신까지
+# 나간다). 두 개 이상 겹친 접두사는 떼지 않는다 — 넓히면 일반 카드를 숨긴다.
+BOARD_PREFIX_RE = re.compile(r"^\[판:[^\]]*\]\s*")
 # 번들이 tasks.status 에 실제로 허용하는 값 전부. 추정이 아니라 실측이다 —
 # 운영 DB `orchestration.db` 의 tasks 테이블 CHECK 제약과 같다 (2026-08-12 확인):
 #   CHECK(status IN ('pending','ready','dispatched','completed','failed','blocked'))
@@ -76,19 +87,33 @@ def now_stamp() -> str:
 
 
 def orca(args: list[str]) -> dict | None:
-    """번들 CLI 한 번. 실패는 None 이며 절대 지어내지 않는다."""
+    """번들 CLI 한 번. 파싱된 응답을 그대로 돌려주며 절대 지어내지 않는다.
+
+    성공(`ok=true`)뿐 아니라 **구조화 실패 응답(`ok=false` + `error.code`)도 그대로 준다.**
+    번들은 실패를 항상 종료코드 1 + stdout JSON 으로 낸다 (2026-08-12 실측:
+    `orchestration send --to run:<없는 run>` → exit 1, stdout `{"ok":false,
+    "error":{"code":"run_not_found"}}`). 예전에는 여기서 `returncode != 0` 을 먼저 보고
+    None 으로 닫아 그 error.code 를 통째로 버렸다 — 그래서 정체 상신이 무슨 이유로
+    거절됐는지(run_not_found·no_active_sender_terminal·dispatch_run_mismatch…)를
+    영수증에 적을 방법이 없었고, error_code() 는 늘 'cli_no_output' 만 냈다.
+
+    None 은 "응답 자체가 없다"만 뜻한다: 호출 불가·시한 초과·빈 stdout·JSON 아님·
+    JSON 이지만 객체가 아님. 성공 판정은 부르는 쪽이 `data.get("ok")` 로 직접 한다 —
+    이 함수가 돌려준다는 사실만으로 성공이 아니다.
+    """
     try:
         proc = subprocess.run(
             [ORCA_BUNDLE, *args, "--json"], capture_output=True, text=True, timeout=30
         )
     except (subprocess.TimeoutExpired, OSError):
         return None
-    if proc.returncode != 0 or not proc.stdout.strip():
+    if not proc.stdout.strip():
         return None
     try:
-        return json.loads(proc.stdout)
+        data = json.loads(proc.stdout)
     except json.JSONDecodeError:
         return None
+    return data if isinstance(data, dict) else None
 
 
 def resolve_role(project: str, board: str, run: str, role: str) -> dict | None:
@@ -208,10 +233,18 @@ def is_resident_card(task: dict) -> bool:
     통째로 유휴로 덮인다 — 2026-08-12 독립 검수가 이 경계로 상신 0통을 재현했다.
     그래서 제목이 이름과 정확히 같거나, 이름 뒤에 하이픈이 붙은 경우만 상주로 본다.
 
+    비교 전에 표준 판 식별자 접두사(`[판:<판이름>] `) 한 개만 뗀다 (BOARD_PREFIX_RE).
+    접두사는 카드 제목 계약이지 이름의 일부가 아닌데, 떼지 않으면 표준대로 지은
+    `[판:quota-collection-1] RELAY-MONITOR-quota-collection-1` 이 상주에서 빠지지 않고
+    일반 작업 1장 + stale dispatch 로 잡혀 거짓 정체를 만든다 (2026-08-12 재현).
+    접두사를 뗀 뒤에도 경계 규칙은 그대로라 `[판:x] RELAY-MONITORING — 일반 카드` 는
+    여전히 일반 작업이다.
+
     제목으로만 가른다. assignee handle 은 순찰마다 바뀔 수 있는 임시 라우팅 값이라
     상주 여부의 근거로 쓰면 handle 이 재발급되는 순간 판정이 뒤집힌다.
     """
     title = str(task.get("task_title") or "").strip()
+    title = BOARD_PREFIX_RE.sub("", title, count=1).strip()
     return any(
         title == name or title.startswith(f"{name}-") for name in RESIDENT_CARD_TITLES
     )
@@ -436,8 +469,14 @@ def patrol(project: str, board: str, run: str, log_path: Path, state_path: Path)
 
     last_cursor = int(state.get("cursor", 0))
     read = orca(["terminal", "read", "--terminal", handle, "--cursor", str(last_cursor), "--limit", "60"])
-    if read is None:
-        append_log(log_path, f"{stamp} | patrol | READ_FAIL {handle} — 화면을 못 읽었다(모름) | 조치 없음")
+    # orca() 는 구조화 실패 응답(ok=false)도 그대로 준다. 성공 판정을 여기서 직접 해야
+    # 한다 — 안 하면 실패 응답의 빈 result 가 "새 출력 0 · 커서 불변"으로 읽혀 못 읽은
+    # 화면이 확정 정체로 둔갑한다. 못 읽음은 정체가 아니라 모름이다.
+    if read is None or not read.get("ok"):
+        append_log(
+            log_path,
+            f"{stamp} | patrol | READ_FAIL {handle}({error_code(read)}) — 화면을 못 읽었다(모름) | 조치 없음",
+        )
         return
 
     term = read.get("result", {}).get("terminal") or {}

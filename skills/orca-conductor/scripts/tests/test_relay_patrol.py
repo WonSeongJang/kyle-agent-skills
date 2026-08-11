@@ -1354,3 +1354,303 @@ def test_unhashable_status_beside_a_healthy_card_still_fails_closed(
         FakeOrca([card("F-HEALTHY"), card("F-BROKEN", status=[])]), monkeypatch
     )
     assert module.count_dispatched(RUN) is None
+
+
+# --- 9. 표준 판 식별자 접두사가 붙은 상주 카드 (F-RELAY-RESIDENT-COUNT-4 요구 a) ----
+#
+# Why (2026-08-12 실측·재현): 카드 제목 계약은 "spec은 항상 `[판:<판이름>]` 접두사로
+# 시작"이다 (SKILL.md:154, mechanics.md 판 식별자 절). 살아 있는 mailbox-relay-1 판의
+# 상주 카드는 접두사 없는 `RELAY-MONITOR-mailbox-relay-1` 이었지만 같은 판의 일반 카드는
+# 전부 `[판:mailbox-relay-1] …` 형태다. 표준대로 지은 새 판의 상주 카드
+# `[판:quota-collection-1] RELAY-MONITOR-quota-collection-1` 은 접두사 때문에 상주에서
+# 빠지지 않았다(재현: is_resident_card → False). 그 카드의 dispatch 는 판 수명 내내
+# 심박 없는 dispatched 라(실측 ctx_5858b93fb90c: dispatched_at 2026-08-11 16:49:30Z,
+# last_heartbeat_at=None) 그대로 stale 로 분류돼 두 사고를 한꺼번에 만든다:
+#   (1) 일반 작업 0장인 조용한 감독이 "도는 카드 1"로 보여 유휴가 아닌 정체가 된다
+#   (2) 자기 감시 카드에 대해 거짓 worker_dispatch_stale 상신이 나가 감독을 잘못 깨운다
+# 반대 대조군(접두사가 붙은 유사 제목 일반 카드)은 여전히 일반 작업이어야 한다.
+
+
+def test_board_prefixed_resident_card_is_not_counted_as_active_work(
+    paths: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 상주만 = 일반 0. 상주 dispatch 가 stale 여도 상신 0 이어야 한다.
+    title = "[판:test-board] RELAY-MONITOR-test-board"
+    t = tid(title)
+    fake = FakeOrca([card(title)], dispatches={t: stale_disp(t)})
+    module = with_fake(fake, monkeypatch)
+
+    lines = run_patrol(module, paths, times=1)
+    assert "도는 일반 카드 0(상주 1장 제외)" in lines[0]
+    assert "판정=유휴" in lines[0]
+    assert fake.sends == []
+
+
+def test_board_prefixed_resident_plus_ordinary_counts_one(
+    paths: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 상주 + 일반 1 = 일반 1. 상주는 제외되고 일반 카드의 정체만 보고된다.
+    resident = "[판:test-board] RELAY-MONITOR-test-board"
+    rt = tid(resident)
+    wt = tid("F-REAL-WORK")
+    fake = FakeOrca(
+        [card(resident), card("F-REAL-WORK", dispatch_id="ctx_aabbccdd0002")],
+        dispatches={
+            rt: stale_disp(rt),
+            wt: stale_disp(wt, dispatch_id="ctx_aabbccdd0002"),
+        },
+    )
+    module = with_fake(fake, monkeypatch)
+
+    lines = run_patrol(module, paths, times=1)
+    assert "도는 일반 카드 1(상주 1장 제외)" in lines[0]
+    assert "worker dispatch 정체(stale 1)" in lines[0]
+    assert len(fake.sends) == 1
+    # 상신은 일반 카드 것만이다 — 상주 카드의 dispatch 는 절대 보고되지 않는다.
+    assert flag(fake.sends[0], "--task-id") == wt
+    assert flag(fake.sends[0], "--dispatch-id") == "ctx_aabbccdd0002"
+
+
+def test_board_prefixed_lookalike_is_ordinary_and_still_escalates(
+    paths: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 반대 대조군: 접두사를 떼도 이름 경계가 어긋나는 제목은 일반 작업이다.
+    # 접두사 처리를 넓게 만들어 일반 카드를 숨기면 이 시험이 떨어진다.
+    title = "[판:test-board] RELAY-MONITORING — ordinary feature card"
+    t = tid(title)
+    fake = FakeOrca([card(title)], dispatches={t: stale_disp(t)})
+    module = with_fake(fake, monkeypatch)
+
+    lines = run_patrol(module, paths, times=1)
+    assert "도는 일반 카드 1(상주 0장 제외)" in lines[0]
+    assert "판정=정체" in lines[0]
+    assert len(fake.sends) == 1
+
+
+@pytest.mark.parametrize(
+    ("title", "expected_resident"),
+    [
+        # 표준 접두사가 붙은 상주 카드 — 상주로 빠져야 한다.
+        ("[판:quota-collection-1] RELAY-MONITOR-quota-collection-1", True),
+        ("[판:mailbox-relay-1] RELAY-MONITOR-mailbox-relay-1", True),
+        ("[판:x] RELAY-MONITOR", True),
+        ("[판:x]RELAY-MONITOR-y", True),           # 접두사 뒤 공백이 없어도 같다
+        ("  [판:x] RELAY-MONITOR-y  ", True),      # 바깥 공백은 다듬는다
+        # 반대 대조군 — 접두사가 붙어도 일반 작업이다.
+        ("[판:x] RELAY-MONITORING — ordinary feature card", False),
+        ("[판:x] RELAY-MONITORX", False),
+        ("[판:x] F-RELAY-MONITOR-LOOKALIKE", False),
+        ("[판:x] relay-monitor-y", False),
+        ("[판:x] ", False),
+        # 접두사 한 개만 뗀다 — 겹쳐 붙이면 상주로 인정하지 않는다(넓히지 않기).
+        ("[판:a] [판:b] RELAY-MONITOR", False),
+        # 접두사 모양이 아니면 떼지 않는다.
+        ("[board:x] RELAY-MONITOR", False),
+        ("[판:x RELAY-MONITOR", False),
+        ("prefix [판:x] RELAY-MONITOR", False),
+    ],
+)
+def test_board_prefixed_resident_title_boundary(
+    title: str, expected_resident: bool
+) -> None:
+    module = load_patrol()
+    assert module.is_resident_card(card(title)) is expected_resident
+
+
+# --- 10. 상신 실패 영수증이 번들 실패 원인을 그대로 적는다 (요구 b) --------------
+#
+# Why (2026-08-12 실측): 번들은 실패를 **종료코드 1 + stdout JSON** 으로 낸다.
+#   $ orca-kyle orchestration send --to run:run_deadbeef0000 --json ; echo $?
+#   {"ok":false,"error":{"code":"run_not_found", ...}}
+#   1
+# 예전 orca() 는 `returncode != 0` 을 먼저 보고 None 으로 닫아 이 error.code 를 통째로
+# 버렸다. 그래서 어떤 상신 실패든 영수증이 'cli_no_output' 한 가지로만 찍혔고, 실제
+# 원인(run_not_found·no_active_sender_terminal·dispatch_run_mismatch…)을 다음 사람이
+# 알 방법이 없었다 — 상신 실패 원인 규명 자체가 막혀 있었다. 이제 구조화 실패 응답을
+# 그대로 돌려주고, 성공 판정은 부르는 쪽이 ok 로 직접 한다.
+
+
+class _FakeProc:
+    def __init__(self, returncode: int, stdout: str) -> None:
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = ""
+
+
+def _stub_subprocess(module: ModuleType, monkeypatch: pytest.MonkeyPatch, proc: object) -> None:
+    monkeypatch.setattr(module.subprocess, "run", lambda *a, **k: proc)
+
+
+def test_orca_keeps_structured_error_body_from_nonzero_exit(
+    monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_patrol()
+    _stub_subprocess(
+        module,
+        monkeypatch,
+        _FakeProc(1, '{"ok":false,"error":{"code":"run_not_found","message":"Run x was not found."}}'),
+    )
+    data = module.orca(["orchestration", "send"])
+    assert data is not None
+    assert data.get("ok") is False
+    assert module.error_code(data) == "run_not_found"
+
+
+@pytest.mark.parametrize(
+    ("returncode", "stdout", "label"),
+    [
+        (1, "", "빈 stdout"),
+        (1, "   \n", "공백뿐인 stdout"),
+        (1, "Error: boom", "JSON 이 아닌 원문"),
+        (1, "[1,2]", "객체가 아닌 JSON 배열"),
+        (1, '"run_not_found"', "객체가 아닌 JSON 문자열"),
+        (0, "not json", "성공 종료인데 JSON 아님"),
+    ],
+)
+def test_orca_returns_unknown_when_there_is_no_usable_response(
+    returncode: int, stdout: str, label: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 응답 자체가 없거나 이해 못 할 모양이면 None(모름)이다. 지어내지 않는다.
+    module = load_patrol()
+    _stub_subprocess(module, monkeypatch, _FakeProc(returncode, stdout))
+    assert module.orca(["orchestration", "send"]) is None, label
+    assert module.error_code(module.orca(["orchestration", "send"])) == "cli_no_output"
+
+
+def test_orca_returns_unknown_when_the_bundle_cannot_be_called(
+    monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_patrol()
+
+    def boom(*args: object, **kwargs: object) -> object:
+        raise OSError("no such binary")
+
+    monkeypatch.setattr(module.subprocess, "run", boom)
+    assert module.orca(["orchestration", "send"]) is None
+
+
+@pytest.mark.parametrize(
+    "code",
+    ["run_not_found", "no_active_sender_terminal", "dispatch_run_mismatch", "dispatch_capability_invalid"],
+)
+def test_escalation_failure_receipt_names_the_bundle_error_code(
+    code: str, paths: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # 실패 영수증에 진짜 원인이 적히고, 성공으로 기록하지 않으며, 다음 순찰에 재시도한다.
+    t = tid("F-REAL-WORK")
+    fake = FakeOrca(
+        [card("F-REAL-WORK")],
+        dispatches={t: stale_disp(t)},
+        send_results=[{"ok": False, "error": {"code": code}}],
+    )
+    module = with_fake(fake, monkeypatch)
+    _, state_path = paths
+
+    lines = run_patrol(module, paths, times=1)
+    assert f"escalation 발송 실패({code})" in lines[0]
+    assert "다음 순찰에 재시도" in lines[0]
+    assert "ctx_0665dde17589" not in state_path.read_text()
+
+    run_patrol(module, paths, times=1)
+    assert len(fake.sends) == 2
+
+
+def test_send_failure_without_error_code_is_named_unknown_not_success(
+    paths: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # ok=false 인데 error.code 가 없으면 'unknown' 이다. 성공으로 꾸미지 않는다.
+    t = tid("F-REAL-WORK")
+    fake = FakeOrca(
+        [card("F-REAL-WORK")], dispatches={t: stale_disp(t)}, send_results=[{"ok": False}]
+    )
+    module = with_fake(fake, monkeypatch)
+    _, state_path = paths
+
+    lines = run_patrol(module, paths, times=1)
+    assert "escalation 발송 실패(unknown)" in lines[0]
+    assert "ctx_0665dde17589" not in state_path.read_text()
+
+
+# --- 11. 교차 Run 전송 계약: --to run:<판> 에 --run 을 병용하지 않는다 ------------
+#
+# Why (mechanics.md 2) 배분과 대기 · 2026-08-11 omo-deep-analysis-1 재현, 2026-08-12
+# 이 판에서 번들로 재확인): send 에 `--to run:<판>` 과 `--run <판>` 을 함께 주면 번들이
+# 조회 범위를 --run 으로 먼저 잡은 뒤 targetRunId 와 대조해 `run_not_found` 로 거절한다
+# (소스 src/main/runtime/rpc/methods/orchestration.ts:406-420 의 resolvedRunId =
+# params.runId ?? targetRunId ?? dispatch.run_id → `run && targetRunId !== run.id` 검사).
+# 실측 영수증:
+#   --to run:run_c3e0754807a5 --run run_7879c26f3598 → {"code":"run_not_found"} exit 1
+#   --to run:run_c3e0754807a5 (--run 제거)          → run_not_found 아님(다른 단계로 진행)
+# 지금 상신 조립은 --run 없이 --from + --to 만 쓰므로 이미 계약에 맞다. 그 상태를 여기서
+# 잠가, 나중에 "판을 명시하자"며 --run 을 덧붙이는 변경이 조용히 들어오지 못하게 한다.
+
+
+def test_escalation_uses_from_and_to_only_never_run_flag(
+    paths: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    t = tid("F-REAL-WORK")
+    fake = FakeOrca([card("F-REAL-WORK")], dispatches={t: stale_disp(t)})
+    module = with_fake(fake, monkeypatch)
+
+    run_patrol(module, paths, times=1)
+
+    assert len(fake.sends) == 1
+    sent = fake.sends[0]
+    assert flag(sent, "--from") == RELAY_HANDLE
+    assert flag(sent, "--to") == f"run:{RUN}"
+    # 병용 금지. --run 이 붙으면 번들이 run_not_found 로 거절해 상신이 0통이 된다.
+    assert "--run" not in sent
+
+
+# --- 12. 화면을 못 읽은 것은 정체가 아니라 모름이다 -----------------------------
+#
+# Why: orca() 가 구조화 실패 응답(ok=false)도 돌려주게 되면서, terminal read 자리에서
+# 성공 판정을 직접 하지 않으면 실패 응답의 빈 result 가 "새 출력 0 · 커서 불변"으로
+# 읽혀 못 읽은 화면이 확정 정체로 둔갑한다. 그 정체는 상신까지 끌고 간다.
+
+
+class _ReadFail(FakeOrca):
+    """terminal read 만 구조화 실패로 답하는 가짜 CLI."""
+
+    def __call__(self, args: list[str]) -> dict | None:
+        if args[:2] == ["terminal", "read"]:
+            self.calls.append(list(args))
+            return {"ok": False, "error": {"code": "terminal_handle_stale"}}
+        return super().__call__(args)
+
+
+def test_terminal_read_structured_failure_closes_as_unknown_not_stall(
+    paths: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    t = tid("F-REAL-WORK")
+    fake = _ReadFail([card("F-REAL-WORK")], dispatches={t: stale_disp(t)})
+    module = with_fake(fake, monkeypatch)
+
+    lines = run_patrol(module, paths, times=1)
+    assert "READ_FAIL" in lines[0]
+    assert "terminal_handle_stale" in lines[0]
+    assert "판정=정체" not in lines[0]
+    assert fake.sends == []
+
+
+class _ReadSilent(FakeOrca):
+    """terminal read 가 아무 응답도 못 내는 가짜 CLI (호출 불가·시한 초과)."""
+
+    def __call__(self, args: list[str]) -> dict | None:
+        if args[:2] == ["terminal", "read"]:
+            self.calls.append(list(args))
+            return None
+        return super().__call__(args)
+
+
+def test_terminal_read_no_output_still_closes_as_unknown(
+    paths: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    t = tid("F-REAL-WORK")
+    fake = _ReadSilent([card("F-REAL-WORK")], dispatches={t: stale_disp(t)})
+    module = with_fake(fake, monkeypatch)
+
+    lines = run_patrol(module, paths, times=1)
+    assert "READ_FAIL" in lines[0]
+    assert "cli_no_output" in lines[0]
+    assert fake.sends == []
