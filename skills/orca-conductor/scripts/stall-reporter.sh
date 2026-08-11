@@ -11,7 +11,7 @@
 set -u
 
 usage() {
-  echo "usage: stall-reporter.sh --project <project> --board <board> --relay-log <path> --super-run <run_id> [--project-run <run_id>] [--relay-role <role>] [--thresholds 3,12,36] [--poll-sec 60] [--relay-silence-sec 900] [--once]" >&2
+  echo "usage: stall-reporter.sh --project <project> --board <board> --relay-log <path> --super-run <run_id> [--project-run <run_id>] [--relay-role <role>] [--thresholds 3,12,36] [--poll-sec 60] [--relay-silence-sec 900] [--board-idle-sec 300] [--once]" >&2
   exit 2
 }
 
@@ -37,6 +37,9 @@ while [ $# -gt 0 ]; do
     --thresholds) [ $# -ge 2 ] || usage; THRESHOLDS="$2"; shift 2 ;;
     --poll-sec) [ $# -ge 2 ] || usage; POLL_SEC="$2"; shift 2 ;;
     --relay-silence-sec) [ $# -ge 2 ] || usage; RELAY_SILENCE_SEC="$2"; shift 2 ;;
+    # B8 시험 호환: --board-idle-sec(B7 인자)를 값만 저장한다. main엔 사건3~5가 없어 쓰는 곳은 없지만,
+    # 이 인자를 모르면 UNKNOWN_FLAG 로 사건6 경로가 아예 실행되지 않는다(코디네이터 결정 A).
+    --board-idle-sec) [ $# -ge 2 ] || usage; BOARD_IDLE_SEC="$2"; shift 2 ;;
     --once) ONCE=1; shift ;;
     *) echo "UNKNOWN_FLAG $1" >&2; usage ;;
   esac
