@@ -129,7 +129,27 @@
           "date": "2026-08-10",
           "what": "확장에서 'Git is required for memory storage but was not found on PATH' 경고가 난다. 치명은 아니지만 PATH 에 git 이 없는 환경으로 뜬다는 뜻이다."
         }
-      ]
+      ],
+      "deep_analysis_2026_08_11_beta5": {
+        "measured": "2026-08-11",
+        "설치": "omo-ai@5.0.0-0.beta.5 / @code-yeongyu/senpi@2026.8.11-2. beta.2->beta.5 업그레이드(8/10~8/11).",
+        "조사_범위_정정": "이전 R-OMO-1(8/11)은 omo bundle + 낡은 로컬 src만 보고 senpi dist builtin·중첩 의존성을 놓쳤다. 이번엔 omo-ai/node_modules/@code-yeongyu/senpi/dist 전체 + builtin/index.js 등록 목록 + 중첩 의존성을 조사했다.",
+        "강제_장치_4종_실물_file_line": {
+          "intent_gate": "senpi dist core/dynamic-prompt/intent-gate.js:9 buildIntentGate() 가 '## Intent Gate (EVERY message)' 섹션 + '> I read this as [intent] - [plan].' 라우팅 줄(required) 생성. 조립 build.js:4,41. agent-session.js 가 basePrompt(loaderSystemPrompt 없을 때)로 사용. 라이브 세션 JSONL에서 라우팅 줄 다수 관측.",
+          "loop_guard_notice": "senpi dist core/extensions/builtin/loop-guard/notice.js:1 LOOP_GUARD_NOTICE_CUSTOM_TYPE='loop-guard:notice'. identical/similar/cycle 3종 루프 감지(bigram 유사도)로 <system-reminder> 생성. builtin/index.js:79 {id:'loop-guard'} 활성 등록. tool_execution_start 이벤트에서 발동, display:true, deliverAs:steer.",
+          "senpi_hooks_stop_state": "senpi dist core/extensions/builtin/hooks/stop-adapter.js:3 STOP_STATE_CUSTOM_TYPE='senpi.hooks.stop-state'(정확히 그 이름). 추가로 senpi.hooks.stop-diagnostics(:4), senpi.hooks.stop-output(:5). STOP_REENTRY_LIMIT=8(:6). block 시 followUp 주입(:76). builtin/index.js:46 {id:'hooks'} 활성 등록.",
+          "codemode": "senpi 중첩 node_modules/@code-yeongyu/senpi-codemode@2026.8.11-2 존재(py/js/jl/rb eval 커널 + shared). resource-loader.js:44 {builtinId:'codemode', packageName:'@code-yeongyu/senpi-codemode'} 등록. goal/prompt.js:59,63 이 senpi-codemode 를 wake 소스로 참조. RCE 면(py/js/jl/rb 임의 코드 실행) 실재."
+        },
+        "prompt_preset_바인딩_중지선언": "모든 주요 코어 preset(claude-opus-5, claude-fable-5, gpt-5.6, grok-4.5, kimi-k3)이 라우팅 줄에 'declared stop condition is BINDING'을 박는다. 예: claude-opus-5.js 'Once declared it is binding: work until it holds', gpt-5.6.js 'STOPPING IS MANDATORY AND IMMEDIATE'. intent-gate 라우팅 줄 + 이 코어 preset = omo의 프롬프트층 2계층.",
+        "omo_2계층_턴종료_규율": {
+          "프롬프트층": "intent-gate 라우팅 줄(중지조건 요구) + 코어 preset(바인딩 선언). 검증 코드는 없음(요구만).",
+          "lifecycle층": "senpi.hooks.stop-state Stop 훅(재진입 제한 8) + completion-bridge terminal transition(TERMINAL_STATUSES 5개: completed/error/cancelled/interrupted/lost)."
+        },
+        "ultrawork_토큰_검증": "ULTRAWORK MODE ENABLED! 토큰 검증 코드는 bundle에 없음(좁은 사실 유지). 단 intent-gate가 별개의 라우팅 선언을 '요구'하므로 'omo에 선언 토큰 장치가 전혀 없다'는 확대 해석은 오류.",
+        "customType_전수_beta5": "omo-ultrawork:directive, omo-senpi:wake(batched, 소스명 IdleInjectionCoordinator, bundle minified=$y), senpi-task.completion, senpi-task:team-message, senpi-task.team-member-liveness, omo-senpi:ulw-continuation, omo-senpi:start-work-continuation, senpi-task.usage. senpi core builtin 추가: loop-guard:notice, senpi.hooks.stop-state/diagnostics/output.",
+        "종료상태_정정": "완료 알림은 TERMINAL_STATUSES 5개(completed/error/cancelled/interrupted/lost) 모두에서. 이전 보고서의 '3개(completed/error/lost)'는 오류.",
+        "남은_불확실성": "codemode 사용자 config 기반 on/off 미확인(등록은 확정). intent-gate 우회 경로(loaderSystemPrompt 주입) 런타임 트레이스 외 100% 단정 불가."
+      }
     },
     {
       "id": "claude-code",
