@@ -94,25 +94,28 @@ def last_preview_line(preview: str) -> str:
 
 
 def collect_companions_detail() -> dict[str, list[dict]]:
-    """판이름 -> [{pid, cmd}]. board-status 의 PID 수집에 실행 명령(위치)을 더한 판."""
+    """판이름 -> [{pid, cmd}]. **PPID=1 상주만 센다** — companion 이 주기 작업 중 fork 한
+    자식(bash 재실행)도 같은 명령줄로 보여 2개로 오보된다 (2026-08-11 omo 판 감독 실측 신고).
+    감시 표준("companion 은 PPID=1 인 상주 것만 센다")과 동일 기준."""
     out: dict[str, list[dict]] = {}
     try:
         proc = subprocess.run(
-            ["ps", "-axo", "pid=,command="], capture_output=True, text=True, timeout=10
+            ["ps", "-axo", "pid=,ppid=,command="], capture_output=True, text=True, timeout=10
         )
     except (subprocess.TimeoutExpired, OSError):
         return out
     for line in proc.stdout.splitlines():
         if "conductor-companion.sh" not in line:
             continue
-        match = re.search(r"--board\s+(\S+)", line)
+        parts = line.split(None, 2)
+        if len(parts) < 3 or not parts[0].isdigit() or parts[1] != "1":
+            continue
+        match = re.search(r"--board\s+(\S+)", parts[2])
         if not match:
             continue
-        pid, _, cmd = line.strip().partition(" ")
-        if pid.isdigit():
-            out.setdefault(match.group(1), []).append(
-                {"pid": int(pid), "cmd": cmd.strip()[:200]}
-            )
+        out.setdefault(match.group(1), []).append(
+            {"pid": int(parts[0]), "cmd": parts[2].strip()[:200]}
+        )
     return out
 
 
