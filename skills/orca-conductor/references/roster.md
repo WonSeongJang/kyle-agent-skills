@@ -175,7 +175,7 @@ curl -s http://127.0.0.1:10100/api/provider-quotas \
 
 조사 카드도 고정 폴백 순서를 쓰지 않는다. `select-routing-pair.sh` 결과의 developer를 조사자로 사용하되, 검수 카드가 없는 읽기 전용 조사이므로 reviewer 결과는 소비하지 않는다. effort는 등록값을 따른다. 조사 전용 모델을 추가하면 `routing-providers.json`에 역할을 확장하기 전까지 developer 후보로 등록한다.
 
-외부 사례·표준을 찾는 선행 조사는 `research-flow.md` 계약을 추가 적용한다. 기본은 Terra-low 또는 Kimi-low이며, 큰 표준이나 여러 원본 저장소를 비교할 때만 high로 올린다. Luna는 최종 비교 판단자가 아니라 링크 수집 보조로만 쓴다.
+외부 사례·표준을 찾는 선행 조사는 `research-flow.md` 계약을 추가 적용한다. **조사 기본은 glm-5.2 medium이다 (2026-08-11 kyle — zai는 5시간 리셋뿐이라 주간 고갈이 없고, kimi는 보존한다). 1M 문맥이 필요한 대규모 읽기만 Kimi-low를 쓴다.** 큰 표준이나 여러 원본 저장소를 비교할 때만 high로 올린다. (구 기본 Terra-low·Kimi-low는 폐기 — Terra는 꺼져 있어 사실상 Kimi 단독 기본이었고, 그래서 조사가 전부 kimi로 갔다.) Luna는 최종 비교 판단자가 아니라 링크 수집 보조로만 쓴다.
 
 ## 미검증 엔진 테스트 대장 (kyle 실측 예정)
 

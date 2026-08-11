@@ -94,7 +94,7 @@
             "docs_config": 4
           },
           "command": "codex -p orca --model zai/glm-5.2 -c model_reasoning_effort=\"medium\"",
-          "enabled": false
+          "note": "조사(읽기 전용) 기본 편성 (2026-08-11 kyle — 조사 기본을 Kimi low에서 이관, 1M 문맥 필요한 대규모 읽기만 kimi 유지)"
         },
         {
           "id": "zai/glm-5.2",
