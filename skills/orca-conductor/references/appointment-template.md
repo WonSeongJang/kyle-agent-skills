@@ -108,7 +108,11 @@ mechanics.md의 `ORCA_BIN=<명시 override 또는 PATH 자동 탐색>` 표현이
 >     "verdict":"CODE_PASS|CODE_FAIL|무효|측정못함","review_rounds":N,"critical":N,"important":N,"minor":N,"duration_min":N}'
 > ```
 >
-> `duration_min`은 발령부터 정산까지다. 모르는 값은 빼지 말고 `null`로 적는다(모름을 0으로 뭉개지 않는다).
+> 시간은 두 값이다 — `duration_total_min`(발령부터 정산까지, 대기·중단 포함)과 `duration_work_min`(실작업).
+> **실작업은 체감이나 역산이 아니라 러너 세션 기록으로 실측한다**: omo는 `~/.senpi/agent/sessions/<워크트리>/`
+> 세션 파일의 첫/마지막 timestamp, codex도 세션 로그 timestamp. 측정 못 하면 `null`(모름을 0으로 뭉개지 않는다).
+> **종료·완료 보고에도 이 실측 시간을 한 줄 포함한다** (2026-08-11 kyle — 슈퍼가 대기 포함 25분으로 보고했는데
+> 실측은 작업 11분이었다. 발령~정산 역산은 대기가 섞여 실행기 성적을 과대평가·과소평가한다).
 > 작업자 카드와 검수 카드 각각 한 줄씩이다.
 
 근거: 2026-08-11 kyle — "omo 작업 성과를 체감이 아니라 데이터로 보고 싶다." 첫 기록은 판
