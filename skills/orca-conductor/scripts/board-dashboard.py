@@ -23,6 +23,7 @@ board-status.py 는 터미널 한 번 흘끗용이고, 이 서버는 브라우�
 
 from __future__ import annotations
 
+import datetime
 import importlib.util
 import json
 import os
@@ -119,6 +120,108 @@ def collect_companions_detail() -> dict[str, list[dict]]:
     return out
 
 
+# 보조 감시 표면 — "무엇이 판을 지키고 있나"를 추측 없이 ps 실측으로 보여준다
+# (2026-08-12 kyle: "슈퍼감독/프로젝트 감독 중심으로 어떤 보조도구들이 돌고있는지 시각화").
+# 원본은 살아 있는 프로세스와 심박 파일이고, 이 표면은 그것을 렌더링만 한다.
+WATCHER_SPECS = [
+    # (스크립트 지문, 쉬운 이름, 한 줄 설명, super급 여부)
+    ("relay-patrol.py", "중계기", "감독 화면을 5분마다 순찰해 무진행 판정 (애매할 때만 AI 호출)", False),
+    ("stall-reporter.sh", "정체 신고기", "판이 비었는데 새 카드가 없는 상태·깨우기 부재를 슈퍼에게 편지로 신고", False),
+    ("supervisor-waker.sh", "감독 자가 점검기", "편지가 없어도 30분마다 감독을 깨움 — 영원한 침묵 방지", False),
+    ("conductor-companion.sh", "companion (배달부)", "감독 명패에 편지가 도착하면 즉시 감독을 깨움", False),
+    ("diag-watch.py", "판정 감시 (슈퍼)", "대시보드 자동 판정 bad·정체를 5분마다 확인해 슈퍼감독을 깨움", True),
+]
+# 살아 있는 판이라면 이 넷은 반드시 떠 있어야 한다 — 없으면 화면에서 "빠짐"으로 경고.
+WATCHER_EXPECTED = ["relay-patrol.py", "stall-reporter.sh", "supervisor-waker.sh", "conductor-companion.sh"]
+
+
+def _log_last_age(path: Path, fmts: list[tuple[str, int]]) -> float | None:
+    """로그 마지막 줄의 타임스탬프 나이(초). 못 읽으면 None(모름)."""
+    try:
+        line = path.read_text(encoding="utf-8", errors="replace").rstrip().rsplit("\n", 1)[-1]
+    except OSError:
+        return None
+    for fmt, ntok in fmts:
+        try:
+            token = " ".join(line.split()[:ntok])
+            ts = datetime.datetime.strptime(token, fmt)
+            return max(0.0, time.time() - ts.timestamp())
+        except (ValueError, IndexError):
+            continue
+    return None
+
+
+def collect_watchers() -> dict:
+    """ps 실측으로 보조 감시 프로세스를 판별로 묶는다. companion 은 PPID=1 상주만."""
+    out: dict = {"super": [], "boards": {}, "collected_at": time.strftime("%H:%M:%S")}
+    try:
+        proc = subprocess.run(
+            ["ps", "-axo", "pid=,ppid=,etime=,command="], capture_output=True, text=True, timeout=10
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return out
+    for line in proc.stdout.splitlines():
+        for pat, label, desc, is_super in WATCHER_SPECS:
+            if pat not in line or "grep" in line:
+                continue
+            parts = line.split(None, 3)
+            if len(parts) < 4 or not parts[0].isdigit():
+                continue
+            pid, ppid, etime, cmd = int(parts[0]), parts[1], parts[2], parts[3]
+            if pat == "conductor-companion.sh" and ppid != "1":
+                continue  # fork 자식 오계수 방지 — collect_companions_detail 과 같은 기준
+            entry: dict = {"kind": pat, "label": label, "desc": desc, "pid": pid,
+                           "ppid1": ppid == "1", "etime": etime, "fresh_age_sec": None,
+                           "fresh_label": None}
+            match = re.search(r"--board\s+(\S+)", cmd)
+            board = match.group(1) if match else None
+            relay_log = re.search(r"--relay-log\s+(\S+)", cmd)
+            repo_root = re.search(r"--repo-root\s+(\S+)", cmd)
+            if pat == "relay-patrol.py" and board:
+                # 중계기는 --relay-log 를 받지 않고 --repo-root 에서 경로를 스스로 만든다.
+                log_path = None
+                if relay_log:
+                    log_path = Path(relay_log.group(1))
+                elif repo_root:
+                    log_path = Path(repo_root.group(1)) / f".orca/relay-logs/{board}.relay-log.md"
+                if log_path:
+                    entry["fresh_age_sec"] = _log_last_age(log_path, [("%Y-%m-%d %H:%M:%S %z", 3)])
+                    entry["fresh_label"] = "최근 순찰"
+            elif pat == "supervisor-waker.sh" and relay_log:
+                hb = Path(relay_log.group(1).replace(".relay-log.md", ".waker-heartbeat.log"))
+                entry["fresh_age_sec"] = _log_last_age(hb, [("%Y-%m-%dT%H:%M:%S%z", 1)])
+                entry["fresh_label"] = "최근 심박"
+            elif pat == "stall-reporter.sh" and board:
+                state = Path.home() / f".cache/rottie/stall-reporter/{board}.state"
+                try:
+                    entry["fresh_age_sec"] = max(0.0, time.time() - state.stat().st_mtime)
+                    entry["fresh_label"] = "최근 점검"
+                except OSError:
+                    pass
+            if is_super or not board:
+                out["super"].append(entry)
+            else:
+                out["boards"].setdefault(board, []).append(entry)
+    # 판정 감시(diag-watch)는 상주가 아니라 5분마다 잠깐 도는 주기 실행형 — ps 순간
+    # 포착이 안 되면 "없음"이 아니라 실행 방식을 그대로 적는다 (모름을 모름으로).
+    if not any(e["kind"] == "diag-watch.py" for e in out["super"]):
+        out["super"].append({
+            "kind": "diag-watch.py", "label": "판정 감시 (슈퍼)", "pid": None, "ppid1": None,
+            "etime": None,
+            "desc": "대시보드 자동 판정 bad·정체를 5분마다 확인해 슈퍼감독을 깨움",
+            "fresh_age_sec": None, "fresh_label": None,
+            "note": "주기 실행형(5분마다 잠깐 돎) — 이 순간 ps에 없는 것은 정상일 수 있다. 상태 원본은 슈퍼 세션",
+        })
+    # Monitor 는 슈퍼 세션 내부(하네스 작업)라 ps 로 실측할 수 없다 — 모름을 모름으로 표기.
+    out["super"].append({
+        "kind": "monitor", "label": "Monitor (슈퍼)", "pid": None, "ppid1": None, "etime": None,
+        "desc": "편지·부하·메모리·프록시·잠자기를 감시해 슈퍼감독 세션을 깨움",
+        "fresh_age_sec": None, "fresh_label": None,
+        "note": "슈퍼 세션 내부 가동이라 ps 실측 불가 — 상태는 슈퍼 세션에서만 확인 가능",
+    })
+    return out
+
+
 def system_stats() -> dict:
     stats: dict = {"load": None, "cpus": os.cpu_count() or 0, "mem_free": None,
                    "disk_avail": None, "disk_used_pct": None}
@@ -152,6 +255,7 @@ def collect(orca: str) -> dict:
     out: dict = {
         "collected_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "system": system_stats(),
+        "watchers": collect_watchers(),
         "boards": [],
         "dormant": [],
         "messages": None,  # None = 못 읽음(모름). 빈 목록과 구분한다.
@@ -822,6 +926,52 @@ def status_text(data: dict) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def _fresh_text(entry: dict) -> str:
+    if entry.get("note"):
+        return str(entry["note"])
+    age = entry.get("fresh_age_sec")
+    if entry.get("fresh_label") is None:
+        return ""
+    if age is None:
+        return f"{entry['fresh_label']} 모름"
+    if age < 90:
+        return f"{entry['fresh_label']} {int(age)}초 전"
+    return f"{entry['fresh_label']} {int(age / 60)}분 전"
+
+
+def watchers_txt(data: dict) -> str:
+    """에이전트 창구 — 화면과 같은 수집 결과를 평문으로."""
+    w = data.get("watchers") or {}
+    live_boards = [b.get("name") for b in data.get("boards") or []]
+    lines = [f"보조 감시 현황 {data.get('collected_at', '모름')}", ""]
+    lines.append("슈퍼감독")
+    for e in w.get("super") or []:
+        pid = f"PID {e['pid']} 가동 {e['etime']}" if e.get("pid") else ""
+        lines.append(f"- {e['label']}: {e['desc']}")
+        detail = " · ".join(x for x in [pid, _fresh_text(e)] if x)
+        if detail:
+            lines.append(f"  {detail}")
+    for board, entries in sorted((w.get("boards") or {}).items()):
+        lines.append("")
+        lines.append(f"판: {board}" + ("" if board in live_boards else " (감독 터미널 없음)"))
+        seen = {e["kind"] for e in entries}
+        for e in entries:
+            detail = " · ".join(x for x in
+                                [f"PID {e['pid']} 가동 {e['etime']}", _fresh_text(e)] if x)
+            lines.append(f"- {e['label']}: {detail}")
+        missing = [label for pat, label, _, sup in WATCHER_SPECS
+                   if not sup and pat in WATCHER_EXPECTED and pat not in seen]
+        if missing and board in live_boards:
+            lines.append(f"- 빠짐 ⚠: {', '.join(missing)}")
+    # 살아 있는 판인데 보조가 하나도 안 잡힌 경우 (슈퍼 판은 Monitor 가 지키므로 제외)
+    for name in live_boards:
+        if name and name not in (w.get("boards") or {}) and "super" not in name.lower():
+            lines.append("")
+            lines.append(f"판: {name}")
+            lines.append("- 빠짐 ⚠: 보조 감시가 하나도 안 떠 있다")
+    return "\n".join(lines).rstrip() + "\n"
+
+
 class Cache:
     def __init__(self, orca: str):
         self.orca = orca
@@ -1051,6 +1201,7 @@ function renderSide() {
   item("terms", "터미널", DATA.terminals.length);
   item("ledger", "원장 (DB)");
   item("routing", "라우팅");
+  item("watchers", "보조 감시", watcherCount());
   item("rules", "규칙");
   item("memo", "메모함", MEMOS ? MEMOS.items.length : undefined);
   side.appendChild(el("div", "navsec", "살아있는 판"));
@@ -1518,6 +1669,84 @@ async function pageLedger(main, tableName) {
   holder.appendChild(card);
 }
 
+// 보조 감시 — 슈퍼감독/판 감독을 누가 지키고 있는지 ps 실측 그대로 (2026-08-12 kyle 요청).
+function watcherCount() {
+  const w = DATA && DATA.watchers;
+  if (!w) return undefined;
+  let n = (w.super || []).filter((e) => e.pid).length;
+  for (const es of Object.values(w.boards || {})) n += es.length;
+  return n;
+}
+
+function freshText(e) {
+  if (e.note) return e.note;
+  if (!e.fresh_label) return "";
+  if (e.fresh_age_sec === null || e.fresh_age_sec === undefined) return e.fresh_label + " 모름";
+  const s = Math.round(e.fresh_age_sec);
+  return e.fresh_label + " " + (s < 90 ? s + "초 전" : Math.round(s / 60) + "분 전");
+}
+
+function watcherRow(e) {
+  const tr = el("tr");
+  tr.appendChild(el("td", "grow", e.label));
+  tr.appendChild(el("td", "dim", e.desc));
+  tr.appendChild(el("td", e.pid ? "mono" : "dim", e.pid ? String(e.pid) : "—"));
+  tr.appendChild(el("td", "dim mono", e.etime || "—"));
+  const fresh = freshText(e);
+  const stale = e.fresh_age_sec !== null && e.fresh_age_sec !== undefined && e.fresh_age_sec > 2700;
+  tr.appendChild(el("td", stale ? "warn" : "dim", fresh));
+  return tr;
+}
+
+function watcherTable(entries) {
+  const table = el("table");
+  const head = el("tr");
+  for (const t of ["이름", "하는 일", "PID", "가동", "최근 활동"]) head.appendChild(el("th", null, t));
+  table.appendChild(head);
+  for (const e of entries) table.appendChild(watcherRow(e));
+  return table;
+}
+
+function pageWatchers(main) {
+  main.appendChild(el("h2", null, "보조 감시"));
+  main.appendChild(el("div", "sub",
+    "슈퍼감독과 판 감독을 지키는 보조 프로세스들 — ps 실측 그대로, 추측 없음. "
+    + "에이전트 창구: curl 127.0.0.1:8787/watchers.txt"));
+  const w = DATA.watchers;
+  if (!w) { main.appendChild(el("div", "bad", "수집 안 됨 — 서버가 옛 코드로 돌고 있을 수 있다.")); return; }
+  const superCard = el("div", "card");
+  superCard.appendChild(el("h3", null, "슈퍼감독 층"));
+  superCard.appendChild(el("div", "dim row", "판 전체·자원·슈퍼 우편함을 지킨다. 아래 판 보조들이 놓친 것을 여기서 잡는다."));
+  superCard.appendChild(watcherTable(w.super || []));
+  main.appendChild(superCard);
+  const liveNames = DATA.boards.map((b) => b.name);
+  const boards = Object.keys(w.boards || {});
+  for (const name of boards) {
+    const entries = w.boards[name];
+    const card = el("div", "card");
+    const h = el("h3", null, "판: " + name);
+    card.appendChild(h);
+    if (!liveNames.includes(name)) card.appendChild(el("div", "warn row", "⚠ 이 판의 감독 터미널이 안 보이는데 보조가 돌고 있다 — 잔재인지 확인 필요"));
+    card.appendChild(watcherTable(entries));
+    const seen = entries.map((e) => e.kind);
+    const expectedLabels = { "relay-patrol.py": "중계기", "stall-reporter.sh": "정체 신고기",
+      "supervisor-waker.sh": "감독 자가 점검기", "conductor-companion.sh": "companion (배달부)" };
+    const missing = Object.keys(expectedLabels).filter((k) => !seen.includes(k)).map((k) => expectedLabels[k]);
+    if (missing.length && liveNames.includes(name))
+      card.appendChild(el("div", "bad row", "⚠ 빠짐: " + missing.join(", ") + " — 살아 있는 판에는 넷 다 있어야 한다"));
+    main.appendChild(card);
+  }
+  for (const name of liveNames) {
+    // 슈퍼 판은 판 보조 대신 슈퍼감독 세션의 Monitor 가 지킨다 — diagnose() 와 같은 기준.
+    if (name && !boards.includes(name) && !name.toLowerCase().includes("super")) {
+      const card = el("div", "card");
+      card.appendChild(el("h3", null, "판: " + name));
+      card.appendChild(el("div", "bad row", "⚠ 보조 감시가 하나도 안 떠 있다 — 이 판은 침묵해도 아무도 모른다"));
+      main.appendChild(card);
+    }
+  }
+}
+
 function pageDormant(main) {
   main.appendChild(el("h2", null, "지난 기록"));
   main.appendChild(el("div", "sub", "감독 터미널이 사라진 실행 기록(run) " + DATA.dormant.length
@@ -1712,6 +1941,7 @@ function render() {
   else if (r.page === "dormant") pageDormant(main);
   else if (r.page === "memo") pageMemo(main);
   else if (r.page === "routing") pageRouting(main);
+  else if (r.page === "watchers") pageWatchers(main);
   else if (r.page === "rules") pageRules(main);
   else pageOverview(main);
   window.scrollTo(0, scrollY);
@@ -1760,6 +1990,12 @@ def make_handler(cache: Cache):
                     200,
                     "text/plain; charset=utf-8",
                     status_text(cache.get()).encode(),
+                )
+            elif self.path == "/watchers.txt":
+                self._send(
+                    200,
+                    "text/plain; charset=utf-8",
+                    watchers_txt(cache.get()).encode(),
                 )
             elif self.path.startswith("/api/status"):
                 body = json.dumps(cache.get(), ensure_ascii=False).encode()
