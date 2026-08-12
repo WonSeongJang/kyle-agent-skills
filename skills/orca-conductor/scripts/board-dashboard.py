@@ -2848,6 +2848,11 @@ def make_handler(cache: Cache):
             elif self.path.startswith("/skills.txt"):
                 query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
                 cat = (query.get("cat") or [None])[0]
+                if cat:  # http.server 가 경로를 latin-1 로 넘겨 한글 분류가 깨진다 (2026-08-12 실측)
+                    try:
+                        cat = cat.encode("latin-1").decode("utf-8")
+                    except (UnicodeEncodeError, UnicodeDecodeError):
+                        pass
                 self._send(200, "text/plain; charset=utf-8", skills_txt(cat).encode())
             elif self.path.startswith("/api/skills"):
                 body = json.dumps(skills_view(), ensure_ascii=False).encode()
