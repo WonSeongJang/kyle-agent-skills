@@ -737,6 +737,106 @@ def rules_txt(want: str | None = None) -> str:
     return "\n".join(out)
 
 
+# 스킬 원장 표면 — 원장(registry/skills-ledger.jsonl)에는 사람이 정한 사실(분류·메모)만 있고,
+# 설명·링크·실물 상태는 여기서 SKILL.md 와 심볼릭 링크를 매번 실측한다 (2026-08-12 kyle:
+# "나만의 스킬 리스트, 디자인부터"). 같은 뼈대의 두 번째 사례: 원장 + 화면 + curl 창구.
+SKILLS_LEDGER = Path.home() / "Dev/kyle-agent-skills/registry/skills-ledger.jsonl"
+SKILLS_ORIGIN = Path.home() / ".claude/skills"
+SKILL_LINK_DIRS = [("codex", Path.home() / ".codex/skills"),
+                   ("gjc", Path.home() / ".gjc/skills"),
+                   ("kimi", Path.home() / ".agents/skills")]
+
+
+def _skill_desc(skill_dir: Path) -> str:
+    """SKILL.md frontmatter 의 description 을 실측으로 읽는다 (>-/> 접힘 문법 포함)."""
+    md = skill_dir / "SKILL.md"
+    try:
+        lines = md.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return "모름 (SKILL.md 없음)"
+    for i, line in enumerate(lines):
+        if not line.startswith("description:"):
+            continue
+        val = line.split(":", 1)[1].strip()
+        if val in (">", ">-", "|", "|-"):
+            parts = []
+            for nxt in lines[i + 1:]:
+                if nxt.startswith((" ", "\t")) and nxt.strip():
+                    parts.append(nxt.strip())
+                elif nxt.strip():
+                    break
+                if len(" ".join(parts)) > 200:
+                    break
+            val = " ".join(parts)
+        return val.strip("'\"")[:220] or "모름"
+    return "모름 (description 없음)"
+
+
+def skills_view() -> dict:
+    ledger: dict[str, dict] = {}
+    err = None
+    try:
+        for line in SKILLS_LEDGER.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                d = json.loads(line, strict=False)
+            except ValueError:
+                continue
+            if "_schema" in d:
+                continue
+            ledger[d.get("name", "")] = d
+    except OSError as e:
+        err = f"원장을 못 읽었다: {e}"
+    items = []
+    installed = set()
+    if SKILLS_ORIGIN.is_dir():
+        for p in sorted(SKILLS_ORIGIN.iterdir()):
+            if not p.is_dir() or p.name.startswith("."):
+                continue
+            installed.add(p.name)
+            led = ledger.get(p.name) or {}
+            links = {}
+            for tool, d in SKILL_LINK_DIRS:
+                lp = d / p.name
+                links[tool] = ("link" if lp.is_symlink() and lp.exists()
+                               else "copy" if lp.exists() else "none")
+            items.append({"name": p.name, "cats": led.get("cats") or ["미분류"],
+                          "note": led.get("note") or "", "curated": led.get("curated", False),
+                          "desc": _skill_desc(p), "origin": str(p), "links": links,
+                          "in_ledger": p.name in ledger})
+    # 원장에는 있는데 실물이 사라진 스킬 — 실측 우선, 경고로 남긴다.
+    ghosts = [name for name in ledger if name not in installed]
+    cats: dict[str, int] = {}
+    for it in items:
+        for c in it["cats"]:
+            cats[c] = cats.get(c, 0) + 1
+    return {"ledger_file": str(SKILLS_LEDGER), "origin_dir": str(SKILLS_ORIGIN),
+            "items": items, "ghosts": ghosts, "cats": cats, "error": err}
+
+
+def skills_txt(cat: str | None = None) -> str:
+    d = skills_view()
+    items = d["items"]
+    if cat:
+        items = [i for i in items if any(cat.lower() in c.lower() for c in i["cats"])]
+    lines = [f"스킬 원장 ({len(items)}개" + (f", 분류={cat}" if cat else "") + ")",
+             f"원장: {d['ledger_file']} / 실물: {d['origin_dir']}",
+             "분류별: " + " ".join(f"{k}={v}" for k, v in sorted(d["cats"].items(), key=lambda x: -x[1])),
+             "필요한 분류만: curl '/skills.txt?cat=design'", ""]
+    for it in items:
+        link = " ".join(f"{t}:{s}" for t, s in it["links"].items())
+        lines.append(f"- {it['name']} [{','.join(it['cats'])}] ({link})")
+        lines.append(f"  {it['desc']}")
+        if it["note"]:
+            lines.append(f"  메모: {it['note']}")
+    if d["ghosts"]:
+        lines.append("")
+        lines.append("⚠ 원장에는 있는데 실물 없음: " + ", ".join(d["ghosts"]))
+    return "\n".join(lines) + "\n"
+
+
 # 성적 표면 — card_outcome 원장(.orca/routing-events/*.jsonl)을 실행기×모델×노력으로
 # 집계해 보여준다 (2026-08-12 kyle: "성적 탭"). 원본은 jsonl 원장, 여기는 렌더링만.
 OUTCOME_GLOB = str(Path.home() / "Dev/*/.orca/routing-events/*.jsonl")
@@ -1314,6 +1414,7 @@ function route() {
   const h = location.hash.replace(/^#/, "");
   if (h.startsWith("board/")) return { page: "board", id: h.slice(6) };
   if (h.startsWith("ledger/")) return { page: "ledger", id: decodeURIComponent(h.slice(7)) };
+  if (h.startsWith("skills/")) return { page: "skills", id: decodeURIComponent(h.slice(7)) };
   return { page: h || "overview" };
 }
 
@@ -1354,6 +1455,7 @@ function renderSide() {
   item("ledger", "원장 (DB)");
   item("routing", "라우팅");
   item("scores", "성적");
+  item("skills", "스킬");
   item("watchers", "보조 감시", watcherCount());
   item("rules", "규칙");
   item("memo", "메모함", MEMOS ? MEMOS.items.length : undefined);
@@ -2029,6 +2131,78 @@ async function pageScores(main) {
   main.appendChild(rc);
 }
 
+// 스킬 원장 탭 — 원장(분류·메모)과 실측(SKILL.md 설명·심볼릭 링크)을 합쳐 보여준다.
+let SKILLS = null;
+async function pageSkills(main, cat) {
+  if (SKILLS === null) {
+    try { SKILLS = await (await fetch("/api/skills")).json(); }
+    catch (e) { SKILLS = { error: String(e), items: [], cats: {}, ghosts: [] }; }
+    render();
+    return;
+  }
+  const head = el("div", "card");
+  head.appendChild(el("h2", null, "스킬 원장"));
+  head.appendChild(el("div", "dim row",
+    "원장(분류·메모): " + (SKILLS.ledger_file || "") + " · 실물: " + (SKILLS.origin_dir || "")
+    + " · 에이전트 창구: curl '/skills.txt?cat=design' · 링크는 매번 실측"));
+  if (SKILLS.error) head.appendChild(el("div", "bad row", "⚠ " + SKILLS.error));
+  // 분류 칩 — 클릭으로 필터. design 을 맨 앞에.
+  const chips = el("div", "row");
+  const catNames = Object.keys(SKILLS.cats || {}).sort((a, b) =>
+    (a === "design" ? -1 : b === "design" ? 1 : SKILLS.cats[b] - SKILLS.cats[a]));
+  const chip = (label, hash, active, count) => {
+    const a = el("a", "tag" + (active ? " who" : ""), label + (count !== undefined ? " " + count : ""));
+    a.href = "#" + hash;
+    a.style.marginRight = "6px";
+    chips.appendChild(a);
+  };
+  chip("전체", "skills", !cat, (SKILLS.items || []).length);
+  for (const c of catNames) chip(c, "skills/" + encodeURIComponent(c), cat === c, SKILLS.cats[c]);
+  head.appendChild(chips);
+  main.appendChild(head);
+
+  const items = (SKILLS.items || []).filter((it) => !cat || it.cats.includes(cat));
+  const card = el("div", "card");
+  card.appendChild(el("h3", null, (cat || "전체") + " — " + items.length + "개"));
+  const table = el("table");
+  const hd = el("tr");
+  for (const t of ["이름", "분류", "설명 (SKILL.md 실측)", "링크 (codex·gjc·kimi)"])
+    hd.appendChild(el("th", null, t));
+  table.appendChild(hd);
+  for (const it of items) {
+    const tr = el("tr");
+    const name = el("td", null, it.name);
+    name.style.whiteSpace = "nowrap"; name.style.fontWeight = "600";
+    tr.appendChild(name);
+    const catsTd = el("td", "dim", it.cats.join(", "));
+    catsTd.style.whiteSpace = "nowrap";
+    if (it.cats.includes("미분류")) catsTd.className = "warn";
+    tr.appendChild(catsTd);
+    const full = it.desc + (it.note ? "  ·  메모: " + it.note : "");
+    // 전역 CSS 가 td 를 줄바꿈 금지로 둔다 — grow 클래스로 접고, 너무 길면 잘라 툴팁으로.
+    const desc = el("td", "dim grow", full.length > 220 ? full.slice(0, 220) + "…" : full);
+    desc.title = full;
+    tr.appendChild(desc);
+    const linkTd = el("td");
+    linkTd.style.whiteSpace = "nowrap";
+    for (const [tool, st] of Object.entries(it.links || {})) {
+      const mark = st === "link" ? "✓" : st === "copy" ? "≠" : "—";
+      const cls = st === "link" ? "ok" : st === "copy" ? "warn" : "dim";
+      const s = el("span", cls, mark + tool + " ");
+      s.title = st === "link" ? "심볼릭 링크 정상" : st === "copy" ? "링크가 아니라 별도 실물 — 갈라질 수 있음" : "없음";
+      linkTd.appendChild(s);
+    }
+    tr.appendChild(linkTd);
+    table.appendChild(tr);
+  }
+  card.appendChild(table);
+  if ((SKILLS.ghosts || []).length)
+    card.appendChild(el("div", "warn row", "⚠ 원장에는 있는데 실물 없음: " + SKILLS.ghosts.join(", ")));
+  card.appendChild(el("div", "dim row",
+    "분류·메모 수정은 화면이 아니라 원장 파일에서 (한 스킬 = 한 줄). ✓=링크 정상, ≠=복사본(갈라질 위험), —=없음"));
+  main.appendChild(card);
+}
+
 // 깨움 사슬 구조도 — "누가 누구를 지키나"를 층으로 그린다. 실측 데이터(판·감독 모델)를
 // 그대로 꽂으므로 그림도 복제가 아니라 렌더링이다.
 function wakeDiagram() {
@@ -2320,6 +2494,7 @@ function render() {
   else if (r.page === "memo") pageMemo(main);
   else if (r.page === "routing") pageRouting(main);
   else if (r.page === "scores") pageScores(main);
+  else if (r.page === "skills") pageSkills(main, r.id);
   else if (r.page === "watchers") pageWatchers(main);
   else if (r.page === "rules") pageRules(main);
   else pageOverview(main);
@@ -2370,6 +2545,13 @@ def make_handler(cache: Cache):
                     "text/plain; charset=utf-8",
                     status_text(cache.get()).encode(),
                 )
+            elif self.path.startswith("/skills.txt"):
+                query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                cat = (query.get("cat") or [None])[0]
+                self._send(200, "text/plain; charset=utf-8", skills_txt(cat).encode())
+            elif self.path.startswith("/api/skills"):
+                body = json.dumps(skills_view(), ensure_ascii=False).encode()
+                self._send(200, "application/json; charset=utf-8", body)
             elif self.path == "/outcomes.txt":
                 self._send(200, "text/plain; charset=utf-8", outcomes_txt().encode())
             elif self.path.startswith("/api/outcomes"):
