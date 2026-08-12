@@ -19,7 +19,7 @@
 | `orca terminal wait` | ● | `--terminal <h> --for tui-idle --timeout-ms <n> --json` | 부팅류 대기 시한 3분 기본 |
 | `orca terminal send` | ■ | `--terminal <h> --text "..." --enter` | **`--submit` 플래그 없음 — `--enter`다** (2026-08-12 실측). omo 대상은 한 줄만 |
 | `orca terminal create` | ■ | `--worktree "id:<repoId>::<path>" --title ... --command ... --json` | 응답에 handle이 안 올 수 있음 — list로 재확인 (2026-08-12 실측) |
-| `orca terminal close` | ■ | `--terminal <handle>` (`--tab`) | **pane 1개만 닫는 개별 종료 — 정리 작업의 표준** |
+| `orca terminal close` | ■ | `--terminal <handle>` **`--tab` 필수** | pane만 닫으면(무 `--tab`) 영속 반영이 안 돼 **앱이 탭을 복원해 부활한다** (2026-08-12 실측 — 23개 닫았는데 12개 부활). 정리 작업은 반드시 `--tab`으로 |
 | `orca terminal stop` | ▲ | `--worktree <selector>` | **터미널 지정 불가 — 워크트리의 터미널 전부 종료.** 개별 종료로 착각 금지 (2026-08-12 사고 직전). 같은 워크트리에 살아 있는 감독·작업자가 있으면 참사 |
 
 ## 오케스트레이션 (orchestration)
