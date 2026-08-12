@@ -1654,3 +1654,35 @@ def test_terminal_read_no_output_still_closes_as_unknown(
     assert "READ_FAIL" in lines[0]
     assert "cli_no_output" in lines[0]
     assert fake.sends == []
+
+
+# ---------------------------------------------------------------------------
+# 화면 파싱 폴백 — omo 감독은 Orca 명부에 model·context 가 비어 온다 (2026-08-12 실측).
+# 화면 상태줄은 어느 호스트든 주는 공통 표면이라 여기서 긁는다 (탈호스트 방향).
+
+
+def test_context_pct_reads_claude_codex_format() -> None:
+    mod = load_patrol()
+    assert mod.parse_context_pct("Context 37% used · something") == 37
+
+
+def test_context_pct_reads_omo_status_line() -> None:
+    mod = load_patrol()
+    line = "senpi 오류 설명 • CH99.1% • $25.437 (sub) • 167K/272K (61.4%) (auto)"
+    assert mod.parse_context_pct(line) == 61
+
+
+def test_context_pct_unknown_stays_none_not_zero() -> None:
+    mod = load_patrol()
+    assert mod.parse_context_pct("아무 상태줄도 없다") is None
+
+
+def test_model_fallback_reads_omo_status_line() -> None:
+    mod = load_patrol()
+    line = "(openai-codex) gpt-5.6-sol:medium\n(OmO Native) Pursuing goal (1h 48m)"
+    assert mod.parse_model_from_screen(line) == "gpt-5.6-sol:medium"
+
+
+def test_model_fallback_unknown_stays_none() -> None:
+    mod = load_patrol()
+    assert mod.parse_model_from_screen("모델 표기가 없는 화면") is None

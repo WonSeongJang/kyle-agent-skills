@@ -192,8 +192,26 @@ def append_log(path: Path, line: str) -> None:
 
 
 def parse_context_pct(text: str) -> int | None:
+    """화면에서 Context 사용률을 긁는다 — 호스트 명부에 의존하지 않는 폴백까지.
+
+    Orca 명부는 codex TUI 만 채워주고 omo 는 'Pi' 로 오인식해 model·context 가
+    비어 온다 (2026-08-12 실측). 화면 텍스트는 어느 호스트·러너든 주는 공통 표면이라
+    여기서 긁는 것이 탈호스트 방향이다 (TODO15 어댑터 경계 감사와 같은 결).
+    """
     matches = re.findall(r"Context (\d+)% used", text or "")
-    return int(matches[-1]) if matches else None
+    if matches:
+        return int(matches[-1])
+    # omo 상태줄: "167K/272K (61.4%)" — 사용률 퍼센트를 그대로 쓴다.
+    omo = re.findall(r"\d+(?:\.\d+)?K/\d+(?:\.\d+)?K \((\d+(?:\.\d+)?)%\)", text or "")
+    if omo:
+        return int(round(float(omo[-1])))
+    return None
+
+
+def parse_model_from_screen(text: str) -> str | None:
+    """omo 상태줄 '(openai-codex) gpt-5.6-sol:medium' 형식에서 모델을 긁는 폴백."""
+    matches = re.findall(r"\(([\w-]+)\)\s+([\w.\-/]+:(?:low|medium|high|xhigh|max))", text or "")
+    return matches[-1][1] if matches else None
 
 
 def _now_utc() -> datetime:
@@ -649,7 +667,8 @@ def patrol(project: str, board: str, run: str, log_path: Path, state_path: Path)
 
     append_log(
         log_path,
-        f"{stamp} | patrol | supervisor {handle} ({member.get('model')}, "
+        f"{stamp} | patrol | supervisor {handle} "
+        f"({member.get('model') or parse_model_from_screen(tail_text) or '모름'}, "
         f"agentState={member.get('agent_state')}) cursor {last_cursor}→{latest}, "
         f"새 출력 {returned}줄, 도구 실행 줄 {tool_lines}, "
         f"Context {prev_ctx}%→{ctx if ctx is not None else '변화없음'}, "
