@@ -743,8 +743,10 @@ def rules_txt(want: str | None = None) -> str:
 # 설명·링크·실물 상태는 여기서 SKILL.md 와 심볼릭 링크를 매번 실측한다 (2026-08-12 kyle:
 # "나만의 스킬 리스트, 디자인부터"). 같은 뼈대의 두 번째 사례: 원장 + 화면 + curl 창구.
 SKILLS_LEDGER = Path.home() / "Dev/kyle-agent-skills/registry/skills-ledger.jsonl"
-SKILLS_ORIGIN = Path.home() / ".claude/skills"
-SKILL_LINK_DIRS = [("codex", Path.home() / ".codex/skills"),
+# 2026-08-12 정본 이행(skills-repo-migration-1) 이후: 정본은 레포, 도구 4곳은 전부 링크.
+SKILLS_ORIGIN = Path.home() / "Dev/kyle-agent-skills/skills"
+SKILL_LINK_DIRS = [("claude", Path.home() / ".claude/skills"),
+                   ("codex", Path.home() / ".codex/skills"),
                    ("gjc", Path.home() / ".gjc/skills"),
                    ("kimi", Path.home() / ".agents/skills")]
 
