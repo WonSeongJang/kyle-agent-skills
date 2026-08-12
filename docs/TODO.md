@@ -182,3 +182,5 @@ bash scripts/validate.sh
 - 장황한 산문 규칙 → 기계가 읽는 원본(JSON/구조화 md) + 표면 등록으로 승격
 - omo-deep-analysis-1 산출물이 나오면 그 개념들도 같은 틀로 편입 (RULE_SOURCES 한 줄 추가 방식)
 - 착수 시점: omo 분석 판 완료 후 새 판 후보
+
+- [ ] `validate.sh` 기준선 7개 실패 해소 — 라우팅 영역이며 TODO2 판 범위 편입을 검토한다. `omo-deep-analysis-1`의 clean/current에서 같은 `7 failed, 33 passed`로 재현됐고, 조사 산출물 때문에 새로 생긴 실패는 0개다. (2026-08-11 슈퍼 관문 `msg_9017de7d8da6`)

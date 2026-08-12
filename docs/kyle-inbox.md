@@ -21,3 +21,5 @@
 - 2026-08-12 11:19 | [슈퍼] 원장+삼표면 코어 규약 문서화 — 판 관제(1호)·스킬 원장(2호)으로 사례 2개 확보. 세 번째 원장(프롬프트·계정 등) 만들기 전에 공통 뼈대 3줄(원장 규약·삼표면·감시 사다리)을 mechanics 0절 확장 또는 별도 규약 문서로 추출 (kyle 2026-08-12 코어 추출 논의)
 - 2026-08-12 13:36 | [슈퍼] Monitor 대시보드 생존 체크 오탐 2회(2026-08-12) — 슈퍼가 코드 반영으로 재시작하는 2초 공백을 죽음으로 판정. 5초 후 1회 재시도 뒤에만 경보하도록 v5.3에서 개선
 - 2026-08-12 14:04 | [슈퍼] 중계기 omo 화면 해석 보강 — relay-patrol이 omo 감독 pane에서 모델명·Context%를 못 읽어(순찰 일지 None) 규칙 판정 불가→딥시크 호출 증가. omo 감독 확대 전에 omo TUI 상태줄 파싱 추가 필요 (2026-08-12 skills-repo-migration-1 실측) - [구현됨 → relay-patrol 화면 파싱 폴백 86b2828, 2026-08-12]
+- 2026-08-12 14:20 | [슈퍼] 디자인 스킬 외부 수집 판의 씨앗 목록 = kyle 크롬 북마크 "깃헙 레포" 폴더(id=860, 59개, ~/Library/Application Support/Google/Chrome/Default/Bookmarks에서 읽기 전용 접근 가능) — Hallmark·impeccable·Superdesign·astryx·StyleGallery·effective-html 등 디자인 스킬 후보 + codex-fleet·herdr·paseo 등 오케스트레이션 동종 조사감 (2026-08-12 확인)
+- 2026-08-12 15:14 | [슈퍼] routing_selected_auto 이벤트가 판 파일이 아니라 unknown.jsonl로 귀속됨 (2026-08-12 design-skill-collection-1 실측 — 판 파일엔 dispatch_auto만 남음). 원장 append 시 board 파라미터 전달 누락으로 추정 — 성적/판별 추적이 흐려지니 select-routing-pair.sh→ledger-append 경로 점검
