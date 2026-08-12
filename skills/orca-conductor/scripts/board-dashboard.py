@@ -983,29 +983,41 @@ MEMO_HEADER = (
 _memo_lock = threading.Lock()
 
 
-# 후보 카드(미배정) — Orca Kyle 포크의 inbox 기능 (improvement-1 Track B 산출).
+# 후보 카드(미배정) — Orca Kyle(실사용 장부)의 inbox 기능 (improvement-1 Track B 산출).
 # run_id 없이 원장에 담긴 카드 후보를 읽기 전용으로 보여준다. 단일 작성자 원칙과
 # 충돌하지 않는다: 어느 판의 큐도 아닌 대기실이며, 인계 시 받은 감독이 주인이 된다.
-FORK_LEDGER_DB = Path.home() / "Library/Application Support/Orca Kyle/orchestration.db"
+# 장부는 LEDGER_DB(원장 탭과 같은 실사용 DB)를 그대로 쓴다 — 경로 복제 금지.
 
 
 def inbox_cards() -> dict:
-    out: dict = {"db": str(FORK_LEDGER_DB), "cards": None, "error": None}
+    out: dict = {"db": str(LEDGER_DB), "cards": None, "error": None}
     try:
-        conn = sqlite3.connect(f"file:{FORK_LEDGER_DB}?mode=ro", uri=True)
+        conn = sqlite3.connect(f"file:{LEDGER_DB}?mode=ro", uri=True)
         conn.row_factory = sqlite3.Row
         try:
             rows = conn.execute(
                 "SELECT id, status, spec, created_at FROM tasks "
-                "WHERE run_id IS NULL AND status NOT IN ('completed','cancelled') "
+                "WHERE run_id IS NULL AND status IN ('ready', 'pending') "
                 "ORDER BY created_at DESC LIMIT 50").fetchall()
+            closed = set()
+            for r in rows:
+                m = re.search(r"\[판[::]\s*([^\]]+)\]", r["spec"] or "")
+                if m:
+                    board = m.group(1).strip()
+                    live = conn.execute(
+                        "SELECT 1 FROM runs WHERE objective LIKE ? AND id IN "
+                        "(SELECT DISTINCT run_id FROM tasks WHERE status='dispatched')",
+                        (f"%{board}%",)).fetchone()
+                    if not live:
+                        closed.add(r["id"])
         finally:
             conn.close()
         out["cards"] = [{"id": r["id"], "status": r["status"],
                          "spec": (r["spec"] or "")[:1200],
-                         "created_at": r["created_at"]} for r in rows]
+                         "created_at": r["created_at"],
+                         "orphan": r["id"] in closed} for r in rows]
     except sqlite3.Error as e:
-        out["error"] = f"포크 장부를 못 읽었다: {e}"  # 없음이 아니라 모름
+        out["error"] = f"장부를 못 읽었다: {e}"  # 없음이 아니라 모름
     return out
 
 
@@ -2413,6 +2425,7 @@ async function pageMemo(main) {
       const row = el("div", "row");
       const head = el("div");
       head.appendChild(el("span", "tag who", c.status));
+      if (c.orphan) head.appendChild(el("span", "warn", " 고아(닫힌 판 잔재 — 포크 UI TASKS에서 처분) "));
       head.appendChild(el("span", "dim mono", " " + c.id + " "));
       const firstLine = (c.spec || "").split("\\n")[0].slice(0, 90);
       head.appendChild(el("span", null, firstLine));

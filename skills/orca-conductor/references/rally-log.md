@@ -359,3 +359,72 @@
 - 복구: 옛 작업자 사망 뒤 미커밋 5파일을 보존했다. `/tmp`의 A11-R1 상세 보고서는 재부팅 뒤 사라졌으므로 읽었다고 꾸미지 않고 장부 메시지 `msg_350a2466b249`, 원래 dispatch TASK, 현재 코드로 증거를 다시 만들었다.
 - 검증: 알려진 False를 None으로 바꾸는 변형 3/3, `--run` 선택화·board 대체·고정 문자열 대체 3/3, 약한 빈 값·상태 추가 변형을 모두 거부했다. unittest 131/131, pytest 131/131·84 subtests. 검수 스냅샷 `33831ff499299322a0726da6057ce0bb4dd3f4ff`은 원래 작업트리 diff와 SHA-256이 같았다.
 - 결말: A11-R2 치명 0·중요 0·경미 0 `CODE_PASS`, 체크포인트 `7268fc52e0f796c1055fd4a42e392f68766df9c8`, 변경 5파일. push·merge·배포·워크트리 정리는 하지 않았다.
+
+### 2026-08-10 [판:conductor-core-contract-1] INT-1 host_scope — 호스트 중립 필수 토큰
+
+- 성격: 호스트 경계 계약·불투명 토큰·입력 강제·변형 방어 · HEAVY · 구현: GLM 5.2 max · 검수: Sol medium.
+- 라운드: I1 뒤 R1에서 중요 2건(core가 공백 토큰을 해석해 거부, 시험 이름 증감 장부 오류) → F2 수정 → 새 세션 R2에서 치명 0·중요 0·경미 0 `CODE_PASS`.
+- 검증: 집중 24개, unittest 136개, pytest 136개·99 subtests 통과. 저장소 밖 사본에서 변형 8/8 적용 확인 뒤 거부. R1 두 결함은 재현되지 않았다.
+- 결말: 체크포인트 `5dfe07ec9d802804b2a16557b57dca4b3ac09ca6`, 변경 5파일. commit tree `f75f1cdeeea5589aca232f9563db4fab6480aef2`는 검수 스냅샷 tree와 같다. merge·push는 결정 관문 전까지 금지했다.
+
+### 2026-08-11 [판:conductor-core-contract-1] TODO2 — 모델 할당량 계약·수집 어댑터
+
+- 성격: provider 할당량 정규화·외부 HTTP 경계·신선도·비밀값 차단 · HEAVY · 구현: Opus high · 검수: Sol medium.
+- 라운드: 최초 구현 뒤 R1에서 중요 5건(비유한 문턱, 비유한 `updatedAt` 전체 예외, URL·토큰 누출, 미사용 `generatedAt` 문서 계약, 비관측 시각 검증 누락)과 사소 1건을 발견했다. F1 수정 뒤 새 세션 R2에서 치명 0·중요 0·사소 0·관찰 1 `CODE_PASS`로 수렴했다.
+- 검증: I1~I5 직접 재현 닫힘, Python 3.9.6 집중 37/37, 전체 unittest 118 중 기존 HostCli 오류 5개와 pytest 116 passed·5 failed의 실패 이름 집합이 기준 HEAD와 동일했다. 대상 밖 사본 변형 9/9는 적용 지문과 죽인 시험 연결을 독립 대조했다.
+- 결말: 체크포인트 `9d2730d7aeae65ae4b016714772f8a202e473c7f`, 신규 3파일 1,195줄. push·merge·배포·워크트리 정리는 하지 않았다.
+- 관찰: `QuotaReading.observed(..., observed_at=10**400)`은 `OverflowError`로 실패 닫히지만 공개 계약이 예외 종류 통일을 약속하지 않아 차단 발견은 아니다. 예외 일관성이 필요해지면 `QuotaError` 변환과 직접 생성 시험을 추가한다.
+### 2026-08-11 [판:conductor-core-contract-1] TODO2-ACCOUNT1 — 불투명 계정 범위
+
+- 성격: 공개 quota 키 확장·하위 호환·계정 격리·불투명 토큰 · HEAVY · 구현: Opus xhigh · 검수: Sol medium.
+- 라운드: 로컬 opencodex·Rottie 소유권 조사 뒤 구현 1회와 새 세션 독립 검수 1회로 종결했다. 치명 0·중요 0·사소 0·관찰 1 `CODE_PASS`다.
+- 검증: 기존 집중 37개를 고치지 않고 11개를 추가해 Python 3.9.6에서 48/48 통과했다. 전체 실패 이름은 기준 체크포인트와 같은 HostCli 5개뿐이었다. 구현 변형 경로가 `<scratchpad>`로만 남아 검수자가 외부 복사본에서 7개를 새로 적용하고 해시 확인 뒤 7/7 거부했다.
+- 결말: 체크포인트 `f9ac51d1b2148850e6b43819b608f77fcbd5897d`, 변경 4파일. push·merge·배포·워크트리 정리는 하지 않았다.
+- 관찰: 공개 dataclass repr에 account_scope가 보인다. 현재는 반환 계약의 식별자이고 인증 비밀값이 아니며 실제 로그 소비 경로가 없어 통과했다. 실제 accountId가 비밀 또는 개인정보로 분류되면 `repr=False`나 마스킹 repr을 별도 계약으로 검토한다.
+
+### 2026-08-11 [판:conductor-core-contract-1] TODO3-DOC1 — wait 소유권 상태 정정
+
+- 성격: 다른 판 소유권·미완료 상태·계약 경계 문서 정정 · LIGHT · 작성: Opus medium · 검수: Sol medium.
+- 라운드: 읽기 전용 소유권 조사 1회 뒤 문서 작성 1회, 새 세션 독립 검수 1회로 종결했다. 검수 결과 중요 0·사소 0 `DOC_PASS`, 네 주장 4/4가 원본·장부·Git과 일치했다.
+- 검증: `docs/TODO.md` 3절에 7줄만 추가되고 삭제·완료 오표기·다른 파일 변경은 0건이다. B1 불합격·main 미병합·운영 미적용, HostAdapter 터미널 3동사, core 자체 SQLite 우편함을 독립 대조했다.
+- 결말: 체크포인트 `dcd6f6173e2ee05fc2566c6a391b0b40a053d69f`, 변경 1파일. wait 면 결정은 상위 관문 `msg_452b10dbf19f`에 남아 있고, merge·push·배포·워크트리 정리는 하지 않았다.
+
+### 2026-08-11 [판:conductor-core-contract-1] TODO4·8 — 사양 이력·배달 영수증 검수 공백 정산
+
+- 성격: 기존 미병합 체크포인트의 검수 기록 복구·카드 사양 이력·배달 영수증 선기록 · HEAVY 읽기 전용 검수 · 검수: Sol medium.
+- 라운드: TODO 4~10 미완료 지도 조사 1회 뒤 새 세션 독립 검수 1회로 종결했다. 치명 0·중요 0·경미 0·관찰 3 `CODE_PASS`다.
+- 검증: unittest 136/136, pytest 136/136·99 subtests, 집중 40/40. 저장소 밖 사본에서 적용을 SHA-256과 cmp로 먼저 확인한 변형 9/9 거부, 생존 0, 측정 못 함 0, 대상 오염 0건이다.
+- 결말: 기존 체크포인트 `6dedf49aecc4f722477017978b0ce9487f0f1272`에 검수 판정만 연결했다. 새 코드 커밋은 없고 INT-1 순차 병합 관문은 유지한다.
+
+### 2026-08-11 [판:conductor-core-contract-1] TODO4-10-DOC1 — 미병합 상태표 동기화
+
+- 성격: 완료된 구현·검수와 제품 미반영 상태를 분리하는 문서 정정 · LIGHT · 작성: GLM 5.2 max · 검수: Sol high.
+- 라운드: TODO 4~10 미완료 지도와 TODO 4·8 독립 검수 뒤 문서 작성 1회, 새 세션 독립 검수 1회로 종결했다. 검수 결과 중요 0·사소 0 `DOC_PASS`다.
+- 검증: `docs/TODO.md` 한 파일에 15줄만 추가되고 삭제 0, `git diff --check` 오류 0, U+2460 계열 0이다. 다섯 체크포인트·검수 이름, 분리 HEAD 보존 경고, TODO 10 소비자 소유권, main 밖 고유 10커밋과 관문 `msg_3e30c7807255`를 독립 대조했다. 시작·종료 문서와 diff SHA-256도 같았다.
+- 결말: 체크포인트 `be60773f97f2d7f926928fd6f51bf69137c50413`, 변경 1파일. 문서가 제품 완료를 선언하지 않으며 merge·push·배포·분리 작업트리 정리는 하지 않았다.
+
+### 2026-08-11 [판:conductor-core-contract-1] TODO13-CORE — provider 제외 core 계약
+
+- 성격: provider 제외 이유·역할 범위·파생 통계·공개 값 검증 · HEAVY · 구현: Opus xhigh · 검수: Sol max.
+- 라운드: 최초 구현 뒤 R1에서 중요 1건을 발견했다. `str`·`frozenset`·`tuple` 하위 타입이 빈 값 검사를 우회하거나 `TypeError`·`AttributeError`를 누출했다. F1에서 exact built-in type 검사로 수정하고 새 세션 델타 재검수에서 치명 0·중요 0·사소 0 `CODE_PASS`로 수렴했다.
+- 검증: 직전 공격 7/7과 추가 경계 2/2가 공개 `ExclusionError` 하나로 닫혔다. 집중 57/57 통과, 전체 186개는 기존 HostCli 오류 5개만 동일했다. 외부 새 사본의 약화 변형은 시도 7·적용 7·거부 7·생존 0·측정 못 함 0, 대상 오염 0건이다.
+- 결말: 체크포인트 `6b5333161f9f90d047c05d224e88d53c2efc0f91`, 변경 4파일. core 값 계약만 합격했으며 실제 라우터·원장 연결은 kyle-agent-skills 소유의 다음 랠리다. push·merge·배포·작업트리 정리는 하지 않았다.
+- 관찰: `ExclusionKind`와 `bool`은 현재 Python에서 하위 타입을 만들 수 없어 exact-type과 `isinstance`가 동치다. 실제 런타임 구멍은 아니며 이 두 자리는 시험보다 코드 모양과 문서가 지킨다.
+
+### 2026-08-11 [판:omo-deep-analysis-1] omo 강제 장치·문서 구조 정밀 분석
+
+- 성격: 설치 실행기·플러그인·세션 증거의 읽기 전용 조사, 실행기 계약 문서 보강, kyle 학습 노트 작성 · HEAVY · 조사: GLM 5.2 medium · 검수: GLM 5.2 high 뒤 Sol medium.
+- 라운드: 최초 조사 뒤 R-R-OMO-1에서 치명 6·중요 3·사소 2를 발견했다. 설치된 senpi dist builtin과 중첩 의존성을 안 봐 Intent Gate·loop-guard:notice·senpi.hooks.stop-state·codemode 4개를 부재로 오보한 것이 핵심이었다. 관점 8 문서 구조 측정을 보강한 뒤 전체·델타 검수를 반복했고, 3라운드 블록 경계에서 실행 중 메시지와 새 카드 발령을 실제 CLI 동사로 분리하는 재설계로 전환했다. 이후 치명 2 → 중요 1 → 0으로 수렴해 R-R-OMO-6 `CODE_PASS`, 학습 노트 R-L-OMO-1도 치명·중요·사소 0 `CODE_PASS`로 종결했다.
+- 검증: 최종 보고서는 CR·ETX·기타 금지 제어문자 0, UTF-8 52,776바이트, Markdown fence 4개, 삼표면 후보 7행, `terminal send` 정상 제출 4·중단 전용 2·혼합 0을 독립 재현했다. 실행기 기록 JSON 문법과 21개 스킬 길이 통계도 재검했다. `validate.sh`는 clean/current 모두 같은 `7 failed, 33 passed`여서 이 판의 새 실패 0으로 분류하고 별도 라우팅 판으로 이관했다.
+- 전환 이벤트: (1) 같은 부재 오보 4개를 설치 전체 조사로 폐기했다. (2) 수정 3라운드 뒤 `dispatch-safe.sh=새 카드 발령`, `orca terminal send=실행 중 메시지`로 계약을 재설계했다. (3) 정상 메시지는 `--text+--enter`, Ctrl-C는 별도 `--interrupt` 뒤 후속 제출로 분리했다. (4) 마지막 문서에 들어간 실제 CR 2개·ETX 2개를 인쇄 가능한 `\r`·`\x03`으로만 바꿔 자동 검사 줄 경계를 복구했다.
+- 결말: 조사 보고서와 `agent-runners.json` 체크포인트 `b6aadfdce55b0cb41587e12e56ecb8526dcc0caf`, kyle-hub 학습 노트 커밋 `c665777aa1a3fb26286eb3248be1e58f4ea63947`. 두 산출물 모두 독립 검수 합격. push·merge·배포·워크트리 삭제는 하지 않았다.
+- 헤드리스 중계기 1호 운영 소감: `relay-patrol.py`가 PPID 1 상주로 승인 창 없이 판 전체를 순찰했고, 작업 카드와 별개 터미널·kicker 없이 낮은 부하로 감시를 유지했다. companion 수 2 오표시는 중계기 문제가 아니라 자식까지 센 대시보드 수집기 결함이었고, 정확 PID 대조 신고로 수집기 수정까지 이어졌다. 다음 판에도 헤드리스 구조를 기본으로 쓰되 사람 화면 숫자는 정확 프로세스 표본으로 한 번 재검하는 편이 안전하다.
+- 관찰: (1) 번들·낡은 로컬 소스만 보면 활성 builtin을 부재로 오보한다. 설치 확장, core builtin, 중첩 의존성 세 출처를 함께 봐야 한다. (2) 문서 경로 이름이 아니라 실제 CLI 동사와 제출 동작을 검증해야 계약이 맞는다. (3) 규칙은 원본 파일·사람 화면·에이전트 창구의 삼표면을 가져야 닿는다. (4) Markdown의 런타임 제어문자 설명은 실제 바이트가 아니라 인쇄 가능한 literal로 남긴다.
+
+### 2026-08-11 [판:conductor-core-contract-1] INT-1 최종 통합·판 종료
+
+- 성격: 계약 코어 10개 체크포인트 순차 통합, 충돌 해소, 전체 회귀·문서 정합 독립 검수, 판 종료 정산 · HEAVY.
+- 라운드: step4~10에서 각 충돌 뿌리를 읽기 전용 조사 → 시험·호환 수정 → 새 세션 독립 검수로 한 단계씩 닫았다. 최종 R1의 문서 8절 공개 명령 불일치 3건을 F1에서 고친 뒤 R2 `INTEGRATION_PASS`, 이어 TODO 상태표도 독립 검수 `DOC_PASS`로 종결했다.
+- 검증: 최종 제품 기준 unittest 405 passed, pytest 405 passed·677 subtests, 문서 공개 명령 27/27 일치, 최종 변형 3/3 거부. main과 origin은 `28eb6cd424ea4cd324b28ad18deed9d9b171b97b`로 일치한다.
+- 결말: kyle origin 관문 A 승인 뒤 push 완료. 종료 승인 `msg_f5138bb5a751`에 따라 작업자 명부 127개를 retired로 정산하고 실제 작업 세션 30개와 작업 폴더 35개를 닫았다. 미커밋 18묶음은 본체 `.staging/board-close-conductor-core-contract-1/dirty-worktrees`에 6.0MB로 보존했고, `card_outcome` 141장 중 실행 기록으로 작업 시간을 잰 67장과 측정 불가 74장을 구분해 기록했다.
+- 관찰: 큰 통합은 충돌을 한 번에 풀지 않고 매 단계에서 실패 이름 집합을 고정해야 원인을 잃지 않는다. 판 종료도 코드 정리만이 아니라 세션·명부·원장·감시 프로세스 네 장부를 함께 닫아야 한다. 과거 복구 카드 1장과 실패 카드 2장은 현재 retire 명령이 각각 공식 `worker_done` 부재와 `failed` 상태를 종결로 인정하지 않아 역사 기록으로 남았다.
