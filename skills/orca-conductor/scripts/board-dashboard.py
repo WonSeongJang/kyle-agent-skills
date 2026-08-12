@@ -945,6 +945,8 @@ def outcomes_view() -> dict:
 # 카드(task_2189d6499cce)가 아직 진행 전이라, 후보 경로를 보고 없으면 현재값만 보여준다.
 # 이력 파일이 생기면 아래 후보에 실경로를 등록한다 (추측 금지 — 없으면 없다고 말한다).
 QUOTA_HISTORY_CANDIDATES = [
+    # 실경로 확정 (2026-08-12, quota판 체크포인트 85e76d4 DEFAULT_HISTORY_PATH 실측)
+    Path.home() / ".cache/conductor-core/quota-usage-history.jsonl",
     Path.home() / ".cache/rottie/routing-usage-history.jsonl",
     Path.home() / "Dev/conductor-core/.orca/quota-history.jsonl",
 ]
