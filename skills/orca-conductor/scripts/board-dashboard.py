@@ -810,6 +810,24 @@ def skills_view() -> dict:
                           "note": led.get("note") or "", "curated": led.get("curated", False),
                           "desc": _skill_desc(p), "origin": str(p), "links": links,
                           "in_ledger": p.name in ledger})
+    # 원장 밖 스킬 — 프로젝트별(.claude/skills)과 도구 자체(~/.omo/skills) 스캔.
+    # 하네스 내장(artifact-design 등)은 바이너리 안이라 파일 표면이 없다 — 정직하게 별도 표기.
+    import glob as _glob
+    extras = []
+    for pdir in sorted(_glob.glob(str(Path.home() / "Dev/*/.claude/skills"))):
+        repo = pdir.split("/")[4]
+        for p in sorted(Path(pdir).iterdir()):
+            if p.is_dir() and not p.name.startswith("."):
+                extras.append({"name": p.name, "scope": f"프로젝트:{repo}",
+                               "desc": _skill_desc(p), "path": str(p),
+                               "dup": p.name in installed})
+    omo_dir = Path.home() / ".omo/skills"
+    if omo_dir.is_dir():
+        for p in sorted(omo_dir.iterdir()):
+            if p.is_dir() and not p.name.startswith("."):
+                extras.append({"name": p.name, "scope": "도구:omo",
+                               "desc": _skill_desc(p), "path": str(p),
+                               "dup": p.name in installed})
     # 원장에는 있는데 실물이 사라진 스킬 — 실측 우선, 경고로 남긴다.
     ghosts = [name for name in ledger if name not in installed]
     cats: dict[str, int] = {}
@@ -817,7 +835,10 @@ def skills_view() -> dict:
         for c in it["cats"]:
             cats[c] = cats.get(c, 0) + 1
     return {"ledger_file": str(SKILLS_LEDGER), "origin_dir": str(SKILLS_ORIGIN),
-            "items": items, "ghosts": ghosts, "cats": cats, "error": err}
+            "items": items, "ghosts": ghosts, "cats": cats, "extras": extras,
+            "builtin_note": ("하네스 내장 스킬(artifact-design 등)은 클로드 바이너리 안에 있어 "
+                             "파일 표면이 없다 — 목록 원본은 각 세션의 /skills 안내다."),
+            "error": err}
 
 
 def skills_txt(cat: str | None = None) -> str:
@@ -838,6 +859,12 @@ def skills_txt(cat: str | None = None) -> str:
     if d["ghosts"]:
         lines.append("")
         lines.append("⚠ 원장에는 있는데 실물 없음: " + ", ".join(d["ghosts"]))
+    if not cat and d.get("extras"):
+        lines.append("")
+        lines.append(f"원장 밖 스킬 {len(d['extras'])}개 (프로젝트별·도구 자체 — 원장 분류 대상 아님):")
+        for e in d["extras"]:
+            lines.append(f"- {e['name']} [{e['scope']}]" + (" (전역 정본과 이름 중복)" if e["dup"] else ""))
+        lines.append(d.get("builtin_note") or "")
     return "\n".join(lines) + "\n"
 
 
@@ -2369,6 +2396,37 @@ async function pageSkills(main, cat) {
   card.appendChild(el("div", "dim row",
     "분류·메모 수정은 화면이 아니라 원장 파일에서 (한 스킬 = 한 줄). ✓=링크 정상, ≠=복사본(갈라질 위험), —=없음"));
   main.appendChild(card);
+
+  // 원장 밖 스킬 — 프로젝트별·도구 자체. 전역 정본과 다른 세계라 섞지 않고 따로 보여준다.
+  if (!cat && (SKILLS.extras || []).length) {
+    const ex = el("div", "card");
+    ex.appendChild(el("h3", null, "원장 밖 스킬 — " + SKILLS.extras.length + "개 (프로젝트별 · 도구 자체)"));
+    const table = el("table");
+    const hd = el("tr");
+    for (const t of ["이름", "범위", "설명 (SKILL.md 실측)"]) {
+      const th = el("th", null, t); th.style.whiteSpace = "nowrap"; hd.appendChild(th);
+    }
+    table.appendChild(hd);
+    for (const e of SKILLS.extras) {
+      const tr = el("tr");
+      const name = el("td", null, e.name);
+      name.style.whiteSpace = "nowrap";
+      if (e.dup) {
+        const dup = el("span", "warn", " ⚠중복");
+        dup.title = "전역 정본에도 같은 이름이 있다 — 갈라질 수 있음";
+        name.appendChild(dup);
+      }
+      tr.appendChild(name);
+      const sc = el("td", "dim", e.scope); sc.style.whiteSpace = "nowrap"; tr.appendChild(sc);
+      const desc = el("td", "dim grow", (e.desc || "").length > 160 ? e.desc.slice(0, 160) + "…" : e.desc);
+      desc.title = e.desc || "";
+      tr.appendChild(desc);
+      table.appendChild(tr);
+    }
+    ex.appendChild(table);
+    ex.appendChild(el("div", "dim row", SKILLS.builtin_note || ""));
+    main.appendChild(ex);
+  }
 }
 
 // 깨움 사슬 구조도 — "누가 누구를 지키나"를 층으로 그린다. 실측 데이터(판·감독 모델)를
