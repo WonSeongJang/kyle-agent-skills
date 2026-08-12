@@ -47,3 +47,4 @@
 
 - `node .../orchestration.mjs` 경로는 **존재하지 않는다** — 오케스트레이션 CLI는 `orca orchestration ...`뿐 (2026-08-12 실측).
 - 대시보드 재시작: 정확한 PID를 `ps`로 잡아 `kill <PID>` 후 재기동 — 이름 기반 pkill 금지.
+- **launchd 등록 보조는 kill로 안 죽는다** — KeepAlive가 되살린다(2026-08-12 실사고: 마감한 이행판 companion이 kill 후 2회 부활). 판 종료 시 보조가 launchd 등록형이면 `launchctl bootout gui/$(id -u)/<라벨>`로 걷어내고, **마감 검증은 ps만이 아니라 `launchctl list | grep <판이름>`까지** 한다. 라벨 이름은 추측 금지 — list로 실측(예: `stall`이 아니라 `stall-reporter`였음).
