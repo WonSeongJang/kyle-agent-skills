@@ -1688,13 +1688,22 @@ function freshText(e) {
 
 function watcherRow(e) {
   const tr = el("tr");
-  tr.appendChild(el("td", "grow", e.label));
+  const name = el("td", null, e.label);
+  name.style.whiteSpace = "nowrap";   // 이름이 긴 설명에 밀려 한 글자씩 세로로 쪼개지는 것 방지
+  tr.appendChild(name);
   tr.appendChild(el("td", "dim", e.desc));
-  tr.appendChild(el("td", e.pid ? "mono" : "dim", e.pid ? String(e.pid) : "—"));
-  tr.appendChild(el("td", "dim mono", e.etime || "—"));
+  const pid = el("td", e.pid ? "mono" : "dim", e.pid ? String(e.pid) : "—");
+  pid.style.whiteSpace = "nowrap";
+  tr.appendChild(pid);
+  const up = el("td", "dim mono", e.etime || "—");
+  up.style.whiteSpace = "nowrap";
+  tr.appendChild(up);
   const fresh = freshText(e);
   const stale = e.fresh_age_sec !== null && e.fresh_age_sec !== undefined && e.fresh_age_sec > 2700;
-  tr.appendChild(el("td", stale ? "warn" : "dim", fresh));
+  const freshTd = el("td", stale ? "warn" : "dim", fresh);
+  freshTd.style.minWidth = "110px";
+  freshTd.style.maxWidth = "420px";   // 긴 안내문이 화면 밖으로 흘러넘치지 않게 접는다
+  tr.appendChild(freshTd);
   return tr;
 }
 
