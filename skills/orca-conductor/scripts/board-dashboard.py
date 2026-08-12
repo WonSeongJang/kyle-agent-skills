@@ -1021,6 +1021,84 @@ def inbox_cards() -> dict:
     return out
 
 
+# 카드 히스토리 — 카드 1장의 일생(생성→발령→티키타카 편지→정산)을 장부·성적 원장에서
+# 모아 시간순으로 보여준다 (2026-08-12 kyle: "카드에 대한 히스토리도 추적 가능할까").
+def card_history(task_id: str) -> dict:
+    out: dict = {"task": None, "events": [], "error": None}
+    if not re.fullmatch(r"task_[0-9a-f]{6,}", task_id or ""):
+        out["error"] = f"잘못된 카드 id: {task_id!r}"
+        return out
+
+    def norm(ts) -> str:
+        return str(ts or "").replace("T", " ")[:19]
+
+    events: list[dict] = []
+    try:
+        conn = sqlite3.connect(f"file:{LEDGER_DB}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        try:
+            t = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+            if t is None:
+                out["error"] = "장부에 없는 카드다"
+                return out
+            out["task"] = {k: t[k] for k in ("id", "run_id", "task_title", "status",
+                                             "spec", "result", "created_at", "completed_at")}
+            events.append({"at": norm(t["created_at"]), "kind": "생성",
+                           "text": t["task_title"] or task_id})
+            if t["completed_at"]:
+                events.append({"at": norm(t["completed_at"]), "kind": "종결",
+                               "text": f"상태 {t['status']}"})
+            for d in conn.execute(
+                    "SELECT * FROM dispatch_contexts WHERE task_id=? ORDER BY created_at",
+                    (task_id,)):
+                events.append({"at": norm(d["dispatched_at"] or d["created_at"]), "kind": "발령",
+                               "text": f"{d['id']} → {(d['assignee_handle'] or '')[:22]}"
+                                       f" (상태 {d['status']}, 실패 {d['failure_count'] or 0}회)"})
+                if d["completed_at"]:
+                    events.append({"at": norm(d["completed_at"]), "kind": "발령 종료",
+                                   "text": f"{d['id']} {d['status']}"})
+            for m in conn.execute(
+                    "SELECT created_at, type, subject, from_handle, to_handle FROM messages "
+                    "WHERE payload LIKE ? OR subject LIKE ? ORDER BY created_at LIMIT 80",
+                    (f"%{task_id}%", f"%{task_id}%")):
+                events.append({"at": norm(m["created_at"]), "kind": f"편지({m['type']})",
+                               "text": (m["subject"] or "")[:100]
+                                       + f"  [{(m['from_handle'] or '')[:14]}→{(m['to_handle'] or '')[:14]}]"})
+        finally:
+            conn.close()
+    except sqlite3.Error as e:
+        out["error"] = f"장부를 못 읽었다: {e}"
+        return out
+    # 성적 원장 — 이 카드가 주인공(taskId)이거나 상대역(counterpart_task)인 정산
+    import glob as _glob
+    for path in _glob.glob(OUTCOME_GLOB):
+        try:
+            text = Path(path).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if task_id not in text:
+            continue
+        for line in text.splitlines():
+            if task_id not in line:
+                continue
+            try:
+                d = json.loads(line.strip(), strict=False)
+            except ValueError:
+                continue
+            p = d.get("payload") or {}
+            role = "정산" if d.get("taskId") == task_id else "상대역 정산"
+            events.append({"at": norm(d.get("occurredAt")), "kind": role,
+                           "text": " ".join(str(x) for x in [
+                               p.get("status") or p.get("verdict") or "",
+                               p.get("model") or "", p.get("effort") or "",
+                               f"라운드 {p.get('round')}" if p.get("round") is not None else "",
+                               f"작업 {p.get('duration_work_min') or p.get('work_minutes')}분"
+                               if (p.get('duration_work_min') or p.get('work_minutes')) else ""] if x)})
+    events.sort(key=lambda e: e["at"])
+    out["events"] = events
+    return out
+
+
 def memo_list() -> dict:
     if not MEMO_FILE.exists():
         return {"file": str(MEMO_FILE), "items": []}
@@ -1455,6 +1533,7 @@ function route() {
   if (h.startsWith("board/")) return { page: "board", id: h.slice(6) };
   if (h.startsWith("ledger/")) return { page: "ledger", id: decodeURIComponent(h.slice(7)) };
   if (h.startsWith("skills/")) return { page: "skills", id: decodeURIComponent(h.slice(7)) };
+  if (h.startsWith("card/")) return { page: "card", id: decodeURIComponent(h.slice(5)) };
   return { page: h || "overview" };
 }
 
@@ -1757,6 +1836,49 @@ function pageBoard(main, runId) {
   main.appendChild(mailCard);
 }
 
+// 카드 히스토리 — 생성→발령→편지→정산을 시간순 한 줄씩 (2026-08-12 kyle 요청).
+async function pageCard(main, taskId) {
+  let d = null;
+  try { d = await (await fetch("/api/card?id=" + encodeURIComponent(taskId))).json(); }
+  catch (e) { d = { error: String(e) }; }
+  const back = el("a", "accent", "← 뒤로");
+  back.href = "javascript:history.back()";
+  main.appendChild(back);
+  main.appendChild(el("h2", null, "카드 히스토리"));
+  if (d.error) { main.appendChild(el("div", "bad", "⚠ " + d.error)); return; }
+  const t = d.task || {};
+  const head = el("div", "card");
+  const info = stInfo(t.status);
+  const h = el("h3");
+  const dot = el("span", "dot"); dot.style.background = info.color;
+  h.appendChild(dot);
+  h.appendChild(document.createTextNode(" " + (t.task_title || t.id) + " — " + info.ko));
+  head.appendChild(h);
+  head.appendChild(el("div", "dim row", t.id + " · run " + (t.run_id || "미배정")
+    + " · 생성 " + (t.created_at || "모름") + (t.completed_at ? " · 종결 " + t.completed_at : "")));
+  if (t.spec) head.appendChild(det("chspec-" + t.id, "명세 전문", el("pre", null, t.spec)));
+  if (t.result) head.appendChild(det("chres-" + t.id, "결과 전문", el("pre", null, t.result)));
+  main.appendChild(head);
+  const card = el("div", "card");
+  card.appendChild(el("h3", null, "타임라인 — " + (d.events || []).length + "건"));
+  card.appendChild(el("div", "dim row", "장부(생성·발령·편지) + 성적 원장(정산·라운드)을 합쳐 시간순."));
+  const table = el("table");
+  const hd = el("tr");
+  for (const c of ["시각 (UTC — 한국시간 -9h)", "유형", "내용"]) hd.appendChild(el("th", null, c));
+  table.appendChild(hd);
+  const kindCls = (k) => k === "정산" || k === "상대역 정산" ? "ok"
+    : k === "발령" ? "who" : k.startsWith("편지") ? "dim" : null;
+  for (const e of d.events || []) {
+    const tr = el("tr");
+    const at = el("td", "dim mono", e.at); at.style.whiteSpace = "nowrap"; tr.appendChild(at);
+    const kd = el("td", kindCls(e.kind), e.kind); kd.style.whiteSpace = "nowrap"; tr.appendChild(kd);
+    tr.appendChild(el("td", "grow dim", e.text));
+    table.appendChild(tr);
+  }
+  card.appendChild(table);
+  main.appendChild(card);
+}
+
 function taskTable(tasks) {
   const table = el("table");
   const head = el("tr");
@@ -1769,7 +1891,11 @@ function taskTable(tasks) {
     const dot = el("span", "dot"); dot.style.background = info.color;
     td1.appendChild(dot); td1.appendChild(document.createTextNode(info.ko));
     tr.appendChild(td1);
-    const tdTitle = el("td", "grow", t.title);
+    const tdTitle = el("td", "grow");
+    const link = el("a", "accent", t.title);
+    link.href = "#card/" + t.id;
+    link.title = "카드 히스토리 보기";
+    tdTitle.appendChild(link);
     if (t.spec || t.result) {
       let text = t.spec || "";
       if (t.result) text += (text ? "\\n\\n── 결과 ──\\n" : "") + t.result;
@@ -2563,6 +2689,7 @@ function render() {
   else if (r.page === "memo") pageMemo(main);
   else if (r.page === "routing") pageRouting(main);
   else if (r.page === "scores") pageScores(main);
+  else if (r.page === "card") pageCard(main, r.id);
   else if (r.page === "skills") pageSkills(main, r.id);
   else if (r.page === "watchers") pageWatchers(main);
   else if (r.page === "rules") pageRules(main);
@@ -2662,6 +2789,11 @@ def make_handler(cache: Cache):
                 self._send(200, "application/json; charset=utf-8", body)
             elif self.path.startswith("/api/memo"):
                 body = json.dumps(memo_list(), ensure_ascii=False).encode()
+                self._send(200, "application/json; charset=utf-8", body)
+            elif self.path.startswith("/api/card"):
+                query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+                tid = (query.get("id") or [""])[0]
+                body = json.dumps(card_history(tid), ensure_ascii=False).encode()
                 self._send(200, "application/json; charset=utf-8", body)
             elif self.path.startswith("/api/inbox-cards"):
                 body = json.dumps(inbox_cards(), ensure_ascii=False).encode()
