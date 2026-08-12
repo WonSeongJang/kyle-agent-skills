@@ -131,6 +131,25 @@ WATCHER_SPECS = [
     ("conductor-companion.sh", "companion (배달부)", "감독 명패에 편지가 도착하면 즉시 감독을 깨움", False),
     ("diag-watch.py", "판정 감시 (슈퍼)", "대시보드 자동 판정 bad·정체를 5분마다 확인해 슈퍼감독을 깨움", True),
 ]
+
+
+def _relay_judge_model() -> str:
+    """중계기 판정 모델 — 원본은 relay-patrol.py 의 JUDGE_MODEL 상수. 복제하지 않고 읽는다."""
+    try:
+        src = (Path(__file__).parent / "relay-patrol.py").read_text(encoding="utf-8")
+        m = re.search(r'JUDGE_MODEL\s*=\s*"([^"]+)"', src)
+        return m.group(1) if m else "모름"
+    except OSError:
+        return "모름"
+
+
+def _watcher_engine(pat: str) -> str:
+    """스크립트인지 AI 인지, AI 면 어떤 모델인지 — kyle 2026-08-12 요청."""
+    if pat == "relay-patrol.py":
+        return f"Python 스크립트 + AI 판정: {_relay_judge_model()} (애매할 때만, command-code CLI)"
+    if pat == "diag-watch.py":
+        return "Python 스크립트 (AI 없음)"
+    return "셸 스크립트 (AI 없음)"
 # 살아 있는 판이라면 이 넷은 반드시 떠 있어야 한다 — 없으면 화면에서 "빠짐"으로 경고.
 WATCHER_EXPECTED = ["relay-patrol.py", "stall-reporter.sh", "supervisor-waker.sh", "conductor-companion.sh"]
 
@@ -172,7 +191,7 @@ def collect_watchers() -> dict:
                 continue  # fork 자식 오계수 방지 — collect_companions_detail 과 같은 기준
             entry: dict = {"kind": pat, "label": label, "desc": desc, "pid": pid,
                            "ppid1": ppid == "1", "etime": etime, "fresh_age_sec": None,
-                           "fresh_label": None}
+                           "fresh_label": None, "engine": _watcher_engine(pat)}
             match = re.search(r"--board\s+(\S+)", cmd)
             board = match.group(1) if match else None
             relay_log = re.search(r"--relay-log\s+(\S+)", cmd)
@@ -209,15 +228,16 @@ def collect_watchers() -> dict:
             "kind": "diag-watch.py", "label": "판정 감시 (슈퍼)", "pid": None, "ppid1": None,
             "etime": None,
             "desc": "대시보드 자동 판정 bad·정체를 5분마다 확인해 슈퍼감독을 깨움",
-            "fresh_age_sec": None, "fresh_label": None,
-            "note": "주기 실행형(5분마다 잠깐 돎) — 이 순간 ps에 없는 것은 정상일 수 있다. 상태 원본은 슈퍼 세션",
+            "fresh_age_sec": None, "fresh_label": None, "engine": _watcher_engine("diag-watch.py"),
+            "note": "주기 실행형 — 순간 ps 부재는 정상일 수 있음 (원본: 슈퍼 세션)",
         })
     # Monitor 는 슈퍼 세션 내부(하네스 작업)라 ps 로 실측할 수 없다 — 모름을 모름으로 표기.
     out["super"].append({
         "kind": "monitor", "label": "Monitor (슈퍼)", "pid": None, "ppid1": None, "etime": None,
         "desc": "편지·부하·메모리·프록시·잠자기를 감시해 슈퍼감독 세션을 깨움",
         "fresh_age_sec": None, "fresh_label": None,
-        "note": "슈퍼 세션 내부 가동이라 ps 실측 불가 — 상태는 슈퍼 세션에서만 확인 가능",
+        "engine": "슈퍼감독 세션 내장 감시 (Claude) — 규칙 판정은 스크립트, 대응 판단은 슈퍼감독",
+        "note": "세션 내부 가동 — ps 실측 불가 (원본: 슈퍼 세션)",
     })
     return out
 
@@ -948,7 +968,7 @@ def watchers_txt(data: dict) -> str:
     for e in w.get("super") or []:
         pid = f"PID {e['pid']} 가동 {e['etime']}" if e.get("pid") else ""
         lines.append(f"- {e['label']}: {e['desc']}")
-        detail = " · ".join(x for x in [pid, _fresh_text(e)] if x)
+        detail = " · ".join(x for x in [e.get("engine") or "", pid, _fresh_text(e)] if x)
         if detail:
             lines.append(f"  {detail}")
     for board, entries in sorted((w.get("boards") or {}).items()):
@@ -957,7 +977,8 @@ def watchers_txt(data: dict) -> str:
         seen = {e["kind"] for e in entries}
         for e in entries:
             detail = " · ".join(x for x in
-                                [f"PID {e['pid']} 가동 {e['etime']}", _fresh_text(e)] if x)
+                                [e.get("engine") or "", f"PID {e['pid']} 가동 {e['etime']}",
+                                 _fresh_text(e)] if x)
             lines.append(f"- {e['label']}: {detail}")
         missing = [label for pat, label, _, sup in WATCHER_SPECS
                    if not sup and pat in WATCHER_EXPECTED and pat not in seen]
@@ -1691,7 +1712,16 @@ function watcherRow(e) {
   const name = el("td", null, e.label);
   name.style.whiteSpace = "nowrap";   // 이름이 긴 설명에 밀려 한 글자씩 세로로 쪼개지는 것 방지
   tr.appendChild(name);
-  tr.appendChild(el("td", "dim", e.desc));
+  const descTd = el("td", "dim", e.desc);
+  if (e.engine) {
+    const eng = el("div", null, e.engine);
+    eng.style.fontSize = "11px";
+    eng.style.marginTop = "3px";
+    // AI 를 부르는 보조만 눈에 띄게 — 나머지는 토큰 소비 0 인 스크립트다.
+    eng.style.color = e.engine.includes("AI 판정") ? "#c9a86a" : "var(--dim2)";
+    descTd.appendChild(eng);
+  }
+  tr.appendChild(descTd);
   const pid = el("td", e.pid ? "mono" : "dim", e.pid ? String(e.pid) : "—");
   pid.style.whiteSpace = "nowrap";
   tr.appendChild(pid);
@@ -1701,8 +1731,8 @@ function watcherRow(e) {
   const fresh = freshText(e);
   const stale = e.fresh_age_sec !== null && e.fresh_age_sec !== undefined && e.fresh_age_sec > 2700;
   const freshTd = el("td", stale ? "warn" : "dim", fresh);
-  freshTd.style.minWidth = "110px";
-  freshTd.style.maxWidth = "420px";   // 긴 안내문이 화면 밖으로 흘러넘치지 않게 접는다
+  // 표 자동 배치는 max-width 를 무시한다 — width 힌트를 줘야 긴 안내문이 칸 안에서 접힌다.
+  freshTd.style.width = fresh.length > 40 ? "320px" : "130px";
   tr.appendChild(freshTd);
   return tr;
 }
@@ -1710,10 +1740,69 @@ function watcherRow(e) {
 function watcherTable(entries) {
   const table = el("table");
   const head = el("tr");
-  for (const t of ["이름", "하는 일", "PID", "가동", "최근 활동"]) head.appendChild(el("th", null, t));
+  for (const t of ["이름", "하는 일", "PID", "가동", "최근 활동"]) {
+    const th = el("th", null, t);
+    th.style.whiteSpace = "nowrap";
+    head.appendChild(th);
+  }
   table.appendChild(head);
   for (const e of entries) table.appendChild(watcherRow(e));
   return table;
+}
+
+// 깨움 사슬 구조도 — "누가 누구를 지키나"를 층으로 그린다. 실측 데이터(판·감독 모델)를
+// 그대로 꽂으므로 그림도 복제가 아니라 렌더링이다.
+function wakeDiagram() {
+  const card = el("div", "card");
+  card.appendChild(el("h3", null, "깨움 사슬 구조도"));
+  card.appendChild(el("div", "dim row", "화살표 방향 = 깨우거나 보고하는 방향. 노란 이름만 AI를 부르고, 나머지는 토큰 소비 0인 스크립트다."));
+  const col = el("div");
+  col.style.display = "flex"; col.style.flexDirection = "column";
+  col.style.alignItems = "center"; col.style.padding = "8px 0";
+
+  const box = (title, subLines, accent) => {
+    const b = el("div");
+    b.style.border = "1px solid " + (accent || "#3a3b40");
+    b.style.borderRadius = "10px"; b.style.padding = "10px 18px";
+    b.style.textAlign = "center"; b.style.background = "var(--card2)";
+    b.style.minWidth = "320px"; b.style.maxWidth = "620px";
+    const t = el("div", null, title); t.style.fontWeight = "600";
+    b.appendChild(t);
+    for (const s of subLines || []) {
+      const d = el("div", "dim", s.text || s); d.style.fontSize = "12px"; d.style.marginTop = "3px";
+      if (s.ai) d.style.color = "#c9a86a";
+      b.appendChild(d);
+    }
+    return b;
+  };
+  const arrow = (label) => {
+    const a = el("div", "dim");
+    a.style.textAlign = "center"; a.style.padding = "3px 0"; a.style.fontSize = "12px";
+    a.style.lineHeight = "1.5";
+    a.textContent = label;
+    return a;
+  };
+
+  col.appendChild(box("kyle", ["대시보드로 보고, 결정 관문·푸시 알림만 받는다"]));
+  col.appendChild(arrow("▲ 결정·사고·완료만 보고"));
+  col.appendChild(box("슈퍼감독 — Claude 세션 (판 사이·전체 자원·판 침묵 담당)", [
+    "지켜주는 것: Monitor(세션 내장) · 판정 감시 diag-watch(5분, 스크립트)"]));
+  col.appendChild(arrow("▲ 정체 신고기 편지 · 완료 보고 ─── ▼ 지시 편지 + 터미널 깨우기"));
+  const boards = DATA.boards.filter((b) => !(b.name || "").toLowerCase().includes("super"));
+  const boardLines = boards.length
+    ? boards.map((b) => ({ text: b.name + " — 감독 " + (b.model || "모델 모름"), ai: false }))
+    : ["살아 있는 판 없음"];
+  col.appendChild(box("판 감독 (판마다 1명, 카드·발령·검수의 단일 작성자)", boardLines, "#5a6b8c"));
+  col.appendChild(arrow("▲ 깨워주는 보조 4종 (판마다): companion=편지 즉시 · 자가 점검기=30분마다 · "
+    + "중계기=5분 순찰 · 정체 신고기=슈퍼에 신고"));
+  col.appendChild(box("보조 감시 4종", [
+    "companion · 자가 점검기 · 정체 신고기 — 전부 셸 스크립트 (AI 없음)",
+    { text: "중계기 — Python + 애매할 때만 AI 판정 (deepseek-v4-flash, 건당 $0.003)", ai: true }]));
+  col.appendChild(arrow("▼ 감독이 발령·검수"));
+  col.appendChild(box("작업자·검수자 (카드 단위 수명)", [
+    "모델은 카드마다 라우터가 고른다 — 현재 편성·점수는 라우팅 탭(원본 routing-providers.json) 참고"]));
+  card.appendChild(col);
+  return card;
 }
 
 function pageWatchers(main) {
@@ -1723,6 +1812,7 @@ function pageWatchers(main) {
     + "에이전트 창구: curl 127.0.0.1:8787/watchers.txt"));
   const w = DATA.watchers;
   if (!w) { main.appendChild(el("div", "bad", "수집 안 됨 — 서버가 옛 코드로 돌고 있을 수 있다.")); return; }
+  main.appendChild(wakeDiagram());
   const superCard = el("div", "card");
   superCard.appendChild(el("h3", null, "슈퍼감독 층"));
   superCard.appendChild(el("div", "dim row", "판 전체·자원·슈퍼 우편함을 지킨다. 아래 판 보조들이 놓친 것을 여기서 잡는다."));
