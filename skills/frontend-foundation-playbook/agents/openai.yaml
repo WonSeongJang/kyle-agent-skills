@@ -1,0 +1,4 @@
+interface:
+  display_name: "Frontend Foundation Playbook"
+  short_description: "모달, 오버레이, 스크롤 잠금 같은 UI 기본기 문제를 공통 기반으로 다루는 스킬"
+  default_prompt: "Use $frontend-foundation-playbook to classify this UI issue as a one-off bug or a shared frontend foundation problem, then standardize the fix at the correct layer."

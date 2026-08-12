@@ -1,0 +1,4 @@
+interface:
+  display_name: "Design Conductor"
+  short_description: "디자인 작업에 맞는 제작·조사·검수 스킬 선택"
+  default_prompt: "Use $design-conductor to choose the right design workflow and quality gates for this task."
