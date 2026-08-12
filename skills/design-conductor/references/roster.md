@@ -56,3 +56,26 @@
 - 역할이 기존 스킬과 겹치면 기본값이 아니라 대안 또는 시험 전용으로 둔다.
 - 설치되지 않은 항목은 자동 호출하지 말고 폴백을 사용한다.
 - 외부 항목을 실제 설치하려면 설치 범위, 라이선스, 제거 방법, 설정 변경을 다시 확인한다.
+
+## 2026-08-12 실사용 평가 완료 스킬
+
+| 스킬 | 역할 | 언제 쓰나 | 언제 피하나 |
+|---|---|---|---|
+| `html` + Effective HTML 5개 전문 스킬 | 작업 형태 라우터 + HTML 제작 보조 | 단일 HTML로 와이어프레임, 프로토타입, 계획, 다이어그램, 디자인 아티팩트를 빠르게 나눌 때 | 앱 코드 한 곳만 고치는 작은 구현 |
+| `taste-skill` | anti-slop 콘셉트 발산자 | 밋밋한 랜딩·포트폴리오에 강한 타이포·비대칭·색 방향이 필요할 때 | 기존 디자인 시스템을 그대로 지켜야 할 때 |
+| `emil-design-eng` | UI polish·모션 전문 보조 | 구조가 잡힌 버튼·카드·토스트의 hover/press/complete 상태를 다듬을 때 | 정보 구조 설계, 정적 인쇄물 |
+| `apple-design` | gesture·spring 전문 보조 | bottom sheet, drag, velocity handoff, interruptible motion | 관제·터미널·데이터 밀도 높은 화면 |
+| `extract-design-system` | 디자인 시스템 조사자 | 기존 URL·로컬 UI에서 색·타입·컴포넌트를 Markdown+JSON으로 추출할 때 | 새 브랜드를 백지에서 발산할 때 |
+| `canvas-design` | 포스터·키비주얼 주 제작자 | 철학이 있는 SVG/PNG/PDF 정적 아트워크 | 웹 앱 상호작용, 폼, 탭 |
+| `frontend-design` | 새 웹 UI 주 제작자 | 랜딩·웹 페이지·대시보드를 주제 맞춤 HTML로 새로 만들 때 | 작은 CSS 버그, 기존 시스템 엄격 보존 |
+| `web-design-reviewer` | 구현 후 코드·디자인 검수자 | 화면 위계·간격·타입·색·반응형·접근성 finding을 severity로 받을 때 | 첫 콘셉트 발산 |
+| `anti-ui-slop` | 외부 레퍼런스 조사 보조 | UIZZE 등 공개 사이트 탐색이 허용된 리디자인 전 비교 | 오프라인·비공개·빠른 검수. 기존 `hallmark`+`web-design-reviewer`가 있으면 보통 생략 |
+| `slides-grab` + 6개 전문 스킬 | 발표자료 주 제작자 | outline→HTML 슬라이드→검수→개별 PNG/PDF가 필요한 덱 | 랜딩 페이지나 운영 컴포넌트 |
+
+### 편성 결정
+
+- 새 랜딩: `frontend-design` 주 제작 → 필요하면 `taste-skill` 콘셉트 보조 → `web-design-reviewer` → `visual-qa`.
+- 기존 화면 리디자인: `extract-design-system` 조사 → `frontend-design` 또는 `hallmark` 제작 → `web-design-reviewer` → `visual-qa`.
+- 상호작용 polish: `emil-design-eng`; drag/spring이면 `apple-design`으로 승급.
+- 포스터: `canvas-design`; 발표 덱: `slides-grab`; 설명 문서 묶음: 기존 `md-visual-workflow`.
+- `anti-ui-slop`은 외부 카탈로그 탐색이 명시 허용된 경우에만 부른다.

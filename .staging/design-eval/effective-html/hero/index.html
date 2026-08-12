@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Rottie - Effective HTML Hero</title><style>
+:root{--paper:#e8e9e4;--ink:#101713;--muted:#536158;--signal:#c83d2b;--frame:#b7beb8;--terminal:#17241d}
+*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font-family:Georgia,"Apple SD Gothic Neo",serif}
+main{min-height:100svh;display:grid;grid-template-columns:minmax(0,1.08fr) minmax(320px,.92fr);padding:clamp(24px,5vw,72px);gap:clamp(28px,5vw,84px);align-items:center}
+.copy{max-width:760px}.eyebrow{font:700 12px/1.2 ui-monospace,monospace;letter-spacing:.17em;color:var(--signal)}
+h1{font-size:clamp(52px,7.8vw,118px);line-height:.88;letter-spacing:-.065em;margin:28px 0;text-wrap:balance}
+p{font:400 clamp(17px,1.6vw,23px)/1.58 -apple-system,"Apple SD Gothic Neo",sans-serif;max-width:58ch;color:var(--muted)}
+.actions{display:flex;gap:12px;margin-top:36px;flex-wrap:wrap}.actions a{font:700 14px/1 ui-monospace,monospace;padding:15px 18px;border:1px solid var(--ink);color:var(--ink);text-decoration:none}
+.actions a:first-child{background:var(--ink);color:var(--paper)}a:focus-visible{outline:3px solid var(--signal);outline-offset:3px}
+.artifact{min-height:520px;background:var(--terminal);color:#d8e8db;border:1px solid #435248;padding:18px;box-shadow:18px 18px 0 #bec4be;display:flex;flex-direction:column;font:13px/1.6 ui-monospace,monospace}
+.top{display:flex;justify-content:space-between;color:#8da091;border-bottom:1px solid #435248;padding-bottom:12px}.pulse{color:#92e6a3}
+.flow{display:grid;gap:18px;margin:auto 0}.step{display:grid;grid-template-columns:56px 1fr;gap:14px;align-items:start}.step b{color:#92e6a3}.step span{color:#99aaa0}.prompt{margin-top:auto;border-top:1px solid #435248;padding-top:16px;color:#92e6a3}
+@media(max-width:760px){main{grid-template-columns:1fr;padding:24px;align-content:start}.artifact{min-height:330px;box-shadow:8px 8px 0 #bec4be}h1{font-size:56px}.actions a{flex:1;text-align:center}}
+@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
+</style></head><body><main><section class="copy"><div class="eyebrow">ROTTIE / DESKTOP AI IDE</div><h1>생각이 끊기기 전에,<br>코드까지.</h1><p>파일을 찾고, 명령을 실행하고, AI와 고친다. 흩어진 개발 작업을 한 창에 잇습니다.</p><nav class="actions" aria-label="시작 동작"><a href="#flow">Rottie 시작하기</a><a href="#flow">작업 흐름 보기</a></nav></section><section class="artifact" id="flow" aria-label="Rottie 작업 흐름"><div class="top"><span>worktree / rottie</span><span class="pulse">● connected</span></div><div class="flow"><div class="step"><b>FILE</b><span>src/features/editor/Editor.tsx</span></div><div class="step"><b>TERM</b><span>npm run tauri:dev</span></div><div class="step"><b>AI</b><span>선택 영역을 읽고 가장 작은 수정안을 준비했습니다.</span></div></div><div class="prompt">❯ 흐름을 떠나지 않고 고치기_</div></section></main></body></html>

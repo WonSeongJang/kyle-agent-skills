@@ -1,0 +1,29 @@
+{
+  "source": "skills/orca-conductor/scripts/board-dashboard.py",
+  "theme": "Terminal",
+  "colors": {
+    "background": "oklch(14% 0.012 160)",
+    "surface": "oklch(19% 0.016 160)",
+    "surfaceRaised": "oklch(23% 0.018 160)",
+    "text": "oklch(88% 0.02 150)",
+    "textMuted": "oklch(64% 0.02 150)",
+    "accent": "oklch(80% 0.17 150)",
+    "warning": "oklch(80% 0.13 85)",
+    "danger": "oklch(72% 0.15 25)",
+    "info": "oklch(78% 0.10 220)"
+  },
+  "typography": {
+    "family": "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+    "scalePx": [11, 13, 16, 22, 32]
+  },
+  "shape": {
+    "radiusPx": 4,
+    "spacingPx": [4, 8, 12, 16, 24, 32],
+    "border": "1px solid oklch(32% 0.02 160 / 0.55)"
+  },
+  "components": {
+    "runCard": "surface + 1px border + 20px padding",
+    "workerRow": "surfaceRaised + 12px padding + status dot",
+    "signalCell": "surfaceRaised + semantic top border + numeric emphasis"
+  }
+}
