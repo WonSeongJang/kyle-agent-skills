@@ -47,7 +47,7 @@ def quotas(kimi_weekly: float, openai_weekly: float) -> str:
     )
 
 
-def test_kimi_sol_when_glm_is_unavailable() -> None:
+def test_kimi_reserve_routes_to_terra_when_glm_is_unavailable() -> None:
     router = load_router()
     decision = router.select_pair(
         router.SelectionRequest(
@@ -58,11 +58,11 @@ def test_kimi_sol_when_glm_is_unavailable() -> None:
             now_ms=1_784_877_896_945,
         )
     )
-    assert decision.developer.provider == "kimi"
+    assert decision.developer.model == "gpt-5.6-terra"
     assert decision.reviewer.provider == "openai"
 
 
-def test_luna_takes_over_when_kimi_is_exhausted_and_terra_is_disabled() -> None:
+def test_terra_takes_over_when_kimi_is_exhausted() -> None:
     router = load_router()
     decision = router.select_pair(
         router.SelectionRequest(
@@ -73,12 +73,9 @@ def test_luna_takes_over_when_kimi_is_exhausted_and_terra_is_disabled() -> None:
             now_ms=1_784_877_896_945,
         )
     )
-    assert decision.developer.model == "gpt-5.6-luna"
+    assert decision.developer.model == "gpt-5.6-terra"
     assert decision.reviewer.model == "gpt-5.6-sol"
     assert decision.same_family is True
-    assert all(
-        pair.developer.model != "gpt-5.6-terra" for pair in decision.ranked_pairs
-    )
 
 
 def test_new_provider_is_considered_without_code_changes(tmp_path: Path) -> None:
@@ -376,7 +373,7 @@ def test_opus_experiment_is_closed_outside_twenty_percent_slot() -> None:
         )
     )
 
-    assert decision.developer.model == "gpt-5.6-luna"
+    assert decision.developer.model == "gpt-5.6-terra"
 
 
 def sol_reviewer_entries(router: ModuleType) -> list[Any]:
@@ -393,7 +390,12 @@ def sol_reviewer_entries(router: ModuleType) -> list[Any]:
 def test_experiment_bucket_is_independent_per_effort() -> None:
     router = load_router()
     entries = [model for model in sol_reviewer_entries(router) if model.experimental]
-    assert len(entries) == 3
+    assert len(entries) == 6
+    assert {model.effort for model in entries} == {"high", "xhigh", "max"}
+    assert all(
+        sum(model.effort == effort for model in entries) == 2
+        for effort in {"high", "xhigh", "max"}
+    )
     assert any(
         len({router.experiment_bucket(model, f"card-{index}") for model in entries}) > 1
         for index in range(100)
@@ -546,7 +548,7 @@ def test_fable_reviewer_is_selected_only_as_last_resort() -> None:
     assert "reviewer_model_last_resort" in squeezed.reasons
 
 
-def test_disabled_model_stays_registered_but_is_never_routed() -> None:
+def test_reenabled_terra_is_registered_and_routable() -> None:
     router = load_router()
     config = router.RoutingConfig.model_validate_json(CONFIG.read_text())
     terra = [
@@ -556,7 +558,7 @@ def test_disabled_model_stays_registered_but_is_never_routed() -> None:
         if model.id == "gpt-5.6-terra"
     ]
     assert terra
-    assert all(model.enabled is False for model in terra)
+    assert all(model.enabled is True for model in terra)
     decision = router.select_pair(
         router.SelectionRequest(
             config_path=CONFIG,
@@ -566,9 +568,8 @@ def test_disabled_model_stays_registered_but_is_never_routed() -> None:
             now_ms=1_784_877_896_945,
         )
     )
-    assert all(
-        "gpt-5.6-terra" not in {pair.developer.model, pair.reviewer.model}
-        for pair in decision.ranked_pairs
+    assert any(
+        pair.developer.model == "gpt-5.6-terra" for pair in decision.ranked_pairs
     )
     assert all(pair.reviewer.model != "opus" for pair in decision.ranked_pairs)
 
@@ -664,7 +665,7 @@ def test_kimi_max_review_wins_over_squeezed_sol_when_its_slot_opens() -> None:
     assert decision.last_resort is False
 
 
-def test_glm_and_kimi_max_developer_experiments_require_strong_reviewer() -> None:
+def test_promoted_glm_and_experimental_kimi_max_require_strong_reviewer() -> None:
     router = load_router()
     config = router.RoutingConfig.model_validate_json(CONFIG.read_text())
     max_devs = [
@@ -675,9 +676,13 @@ def test_glm_and_kimi_max_developer_experiments_require_strong_reviewer() -> Non
         if model.role is router.Role.DEVELOPER and model.effort == "max"
     ]
     assert {model.id for model in max_devs} == {"zai/glm-5.2", "kimi/k3[1m]"}
+    glm_max = next(model for model in max_devs if model.id == "zai/glm-5.2")
+    kimi_max = next(model for model in max_devs if model.id == "kimi/k3[1m]")
+    assert glm_max.experimental is False
+    assert glm_max.experiment_share_percent == 100
+    assert kimi_max.experimental is True
+    assert kimi_max.experiment_share_percent == 20
     for model in max_devs:
-        assert model.experimental is True
-        assert model.experiment_share_percent == 20
         assert set(model.reviewer_family_allowlist) == {"openai", "anthropic"}
         assert 'model_reasoning_effort="max"' in model.command
 
@@ -698,4 +703,4 @@ def test_opus_experiment_respects_anthropic_quota_exhaustion() -> None:
         )
     )
 
-    assert decision.developer.model == "gpt-5.6-luna"
+    assert decision.developer.model == "gpt-5.6-terra"
