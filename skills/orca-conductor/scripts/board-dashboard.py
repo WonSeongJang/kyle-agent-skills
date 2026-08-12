@@ -983,6 +983,32 @@ MEMO_HEADER = (
 _memo_lock = threading.Lock()
 
 
+# 후보 카드(미배정) — Orca Kyle 포크의 inbox 기능 (improvement-1 Track B 산출).
+# run_id 없이 원장에 담긴 카드 후보를 읽기 전용으로 보여준다. 단일 작성자 원칙과
+# 충돌하지 않는다: 어느 판의 큐도 아닌 대기실이며, 인계 시 받은 감독이 주인이 된다.
+FORK_LEDGER_DB = Path.home() / "Library/Application Support/Orca Kyle/orchestration.db"
+
+
+def inbox_cards() -> dict:
+    out: dict = {"db": str(FORK_LEDGER_DB), "cards": None, "error": None}
+    try:
+        conn = sqlite3.connect(f"file:{FORK_LEDGER_DB}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        try:
+            rows = conn.execute(
+                "SELECT id, status, spec, created_at FROM tasks "
+                "WHERE run_id IS NULL AND status NOT IN ('completed','cancelled') "
+                "ORDER BY created_at DESC LIMIT 50").fetchall()
+        finally:
+            conn.close()
+        out["cards"] = [{"id": r["id"], "status": r["status"],
+                         "spec": (r["spec"] or "")[:1200],
+                         "created_at": r["created_at"]} for r in rows]
+    except sqlite3.Error as e:
+        out["error"] = f"포크 장부를 못 읽었다: {e}"  # 없음이 아니라 모름
+    return out
+
+
 def memo_list() -> dict:
     if not MEMO_FILE.exists():
         return {"file": str(MEMO_FILE), "items": []}
@@ -2372,6 +2398,34 @@ async function pageMemo(main) {
   }
   card.appendChild(table);
   main.appendChild(card);
+
+  // 후보 카드(미배정) — Orca Kyle 포크 inbox 읽기 전용 표면 (2026-08-12 kyle 발굴).
+  let inbox = null;
+  try { inbox = await (await fetch("/api/inbox-cards")).json(); } catch (e) { inbox = { error: String(e) }; }
+  const ic = el("div", "card");
+  ic.appendChild(el("h3", null, "후보 카드 (미배정 inbox)"));
+  ic.appendChild(el("div", "dim row",
+    "Orca Kyle 포크의 미배정 카드 대기실 — 판 소속이 아니라 단일 작성자 규칙 밖. 인계 시 카드 ID 유지. 원본: " + (inbox.db || "")));
+  if (inbox.error) ic.appendChild(el("div", "warn row", "⚠ " + inbox.error));
+  else if (!(inbox.cards || []).length) ic.appendChild(el("div", "dim", "대기 중인 후보 카드 없음."));
+  else {
+    for (const c of inbox.cards) {
+      const row = el("div", "row");
+      const head = el("div");
+      head.appendChild(el("span", "tag who", c.status));
+      head.appendChild(el("span", "dim mono", " " + c.id + " "));
+      const firstLine = (c.spec || "").split("\\n")[0].slice(0, 90);
+      head.appendChild(el("span", null, firstLine));
+      row.appendChild(head);
+      const body = el("div", "dim");
+      body.style.whiteSpace = "pre-wrap";
+      body.style.fontSize = "12px";
+      body.textContent = (c.spec || "").slice(0, 700);
+      row.appendChild(body);
+      ic.appendChild(row);
+    }
+  }
+  main.appendChild(ic);
 }
 
 // 라우팅 보기 — 읽기 전용. 정책 수정은 routing-providers.json 파일이지 화면이 아니다.
@@ -2595,6 +2649,9 @@ def make_handler(cache: Cache):
                 self._send(200, "application/json; charset=utf-8", body)
             elif self.path.startswith("/api/memo"):
                 body = json.dumps(memo_list(), ensure_ascii=False).encode()
+                self._send(200, "application/json; charset=utf-8", body)
+            elif self.path.startswith("/api/inbox-cards"):
+                body = json.dumps(inbox_cards(), ensure_ascii=False).encode()
                 self._send(200, "application/json; charset=utf-8", body)
             elif self.path.startswith("/api/routing"):
                 body = json.dumps(routing_view(), ensure_ascii=False).encode()
