@@ -687,6 +687,8 @@ RULE_SOURCES = [
      Path.home() / "Dev/kyle-agent-skills/skills/orca-conductor/references/routing-providers.json"),
     ("실행기(runner)별 함정과 검증법",
      Path.home() / "Dev/kyle-agent-skills/skills/conductor/references/agent-runners.json"),
+    ("orca 명령 안전 원장 — 위험 등급·검증된 시그니처 (command-safety)",
+     Path.home() / "Dev/kyle-agent-skills/skills/orca-conductor/references/orca-command-safety.md"),
 ]
 
 
