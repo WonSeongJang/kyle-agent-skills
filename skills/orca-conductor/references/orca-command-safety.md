@@ -32,7 +32,7 @@
 | `run-use` | ■ | `--run <runId>` | 코디네이터 터미널 재바인딩 — 자기 신분이 바뀐다 |
 | `inbox` | ● | `--limit <n>` (`--terminal <h>`) | 전 수신자 조회. 죽은 명패의 read=0 편지는 소비 수단 없음(살아있는 터미널만 check 가능, 2026-08-12 실측) |
 | `task-update` | ■ | `--id <taskId> --status <s> --result '<json>'` | 상태값은 pending·ready·dispatched·completed·failed·blocked뿐 — **cancelled 없음**. **run_id 없는 미배정(inbox) 카드는 CLI로 못 만진다**(바인딩 Run 범위만 조회, 2026-08-12 실측) — 처리는 포크 UI TASKS 패널에서 |
-| `gate-resolve` | ■ | 관문 1개 지정 | 읽음(read=1)은 kyle 인지가 아니다 — resolved는 사용자 명시 답만 |
+| `gate-resolve` | ■ | `--id <gateId> --resolution <text>` | **교차 Run 관문은 못 닫는다**(Gate not found — 바인딩 Run 범위만, 2026-08-12 실측). 슈퍼→판 관문 답변은 승인 편지+깨우기로 보내고 감독이 자기 관문을 닫는다. 읽음(read=1)은 kyle 인지가 아니다 |
 | `reset` | ▲ | scope 명시 | 상태 스코프 초기화 — 슈퍼는 쓰지 않는다. 필요하면 kyle 관문 |
 
 ## 워크트리
