@@ -428,3 +428,11 @@
 - 검증: 최종 제품 기준 unittest 405 passed, pytest 405 passed·677 subtests, 문서 공개 명령 27/27 일치, 최종 변형 3/3 거부. main과 origin은 `28eb6cd424ea4cd324b28ad18deed9d9b171b97b`로 일치한다.
 - 결말: kyle origin 관문 A 승인 뒤 push 완료. 종료 승인 `msg_f5138bb5a751`에 따라 작업자 명부 127개를 retired로 정산하고 실제 작업 세션 30개와 작업 폴더 35개를 닫았다. 미커밋 18묶음은 본체 `.staging/board-close-conductor-core-contract-1/dirty-worktrees`에 6.0MB로 보존했고, `card_outcome` 141장 중 실행 기록으로 작업 시간을 잰 67장과 측정 불가 74장을 구분해 기록했다.
 - 관찰: 큰 통합은 충돌을 한 번에 풀지 않고 매 단계에서 실패 이름 집합을 고정해야 원인을 잃지 않는다. 판 종료도 코드 정리만이 아니라 세션·명부·원장·감시 프로세스 네 장부를 함께 닫아야 한다. 과거 복구 카드 1장과 실패 카드 2장은 현재 retire 명령이 각각 공식 `worker_done` 부재와 `failed` 상태를 종결로 인정하지 않아 역사 기록으로 남았다.
+
+### 2026-08-12 [판:quota-collection-1] TODO2 만료형 공급자 강제
+
+- 성격: 만료 있는 라우팅 예외·실패 닫힘·비밀 사유 비노출 · LIGHT · 구현: Kimi low · 검수: Sol medium.
+- 라운드: 최초 구현 뒤 R1에서 중요 1건을 발견했다. 강제 공급자가 disabled 또는 unavailable이면 실제 원인 대신 일반 `No runnable developer/reviewer pair remains` 오류가 났다. FIX1에서 강제 공급자 사용 가능성을 먼저 검사하고, 새 세션 R2 델타 재검수에서 치명 0·중요 0·사소 1 `CODE_PASS`로 수렴했다.
+- 검증: 기존 적용 중·정확 만료·malformed 경계 3개와 disabled/unavailable 경계 1개를 정식 uv 환경에서 직접 실행해 4 passed. 검수 전후 status·diff·대상 파일 해시가 같았다. 사유 원문은 오류와 선택 reason에 나오지 않았다.
+- 결말: 체크포인트 `30470ffb8868ab050577022cb96415906f0b498f`, 변경 3파일. FIX1 실제 작업 4분 31초, 최종 재검수 2분 7초. 결과 문서의 시험 증가량 `+44`는 실측 `+43`인 사소 오계수이며 제품에는 영향이 없다. push·merge·배포·작업트리 삭제는 하지 않았다.
+- 관찰: 강제 선택은 후보 필터만 추가하면 오류 원인을 잃는다. 강제를 적용하기 전에 대상의 존재·활성·요청 가용성을 따로 검사하고, 일반 후보 고갈과 구분되는 오류로 닫아야 운영자가 설정 문제를 바로 찾을 수 있다.
