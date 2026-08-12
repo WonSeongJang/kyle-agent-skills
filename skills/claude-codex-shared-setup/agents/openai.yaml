@@ -1,0 +1,4 @@
+interface:
+  display_name: "Claude/Codex Setup"
+  short_description: "Set up shared globals with tool-local agents"
+  default_prompt: "Use $claude-codex-shared-setup in either '새 컴퓨터용' or '기존 사용 컴퓨터 정리 및 적용' mode to keep shared Claude/Codex globals, split tool-local agent directories, and link only newly requested shared skills."
