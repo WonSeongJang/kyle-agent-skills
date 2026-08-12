@@ -63,3 +63,4 @@
 {"name": "workers-best-practices", "cats": ["cloudflare"], "note": "", "added": "2026-08-12", "curated": false}
 {"name": "workflow-bootstrap", "cats": ["conductor"], "note": "", "added": "2026-08-12", "curated": false}
 {"name": "wrangler", "cats": ["cloudflare"], "note": "", "added": "2026-08-12", "curated": false}
+{"name": "hallmark", "cats": ["design"], "note": "출처 https://github.com/Nutlope/hallmark @13ac0ec7e148655948100b6396439e481361d690 (skills/hallmark 정본, 107개 md); 기능: URL WebFetch(study), 외부 자산 권장, 로컬 design.md 쓰기(opt-in)", "added": "2026-08-12", "curated": false}
