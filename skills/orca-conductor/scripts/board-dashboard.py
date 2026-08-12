@@ -737,6 +737,137 @@ def rules_txt(want: str | None = None) -> str:
     return "\n".join(out)
 
 
+# 성적 표면 — card_outcome 원장(.orca/routing-events/*.jsonl)을 실행기×모델×노력으로
+# 집계해 보여준다 (2026-08-12 kyle: "성적 탭"). 원본은 jsonl 원장, 여기는 렌더링만.
+OUTCOME_GLOB = str(Path.home() / "Dev/*/.orca/routing-events/*.jsonl")
+
+
+def outcomes_view() -> dict:
+    import glob as _glob
+    rows: list[dict] = []
+    files = 0
+    for path in _glob.glob(OUTCOME_GLOB):
+        files += 1
+        try:
+            text = Path(path).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or '"card_outcome"' not in line:
+                continue
+            try:
+                d = json.loads(line, strict=False)
+            except ValueError:
+                continue
+            if d.get("eventType") != "card_outcome":
+                continue
+            p = d.get("payload") or {}
+            rows.append({
+                "at": (d.get("occurredAt") or "")[:16].replace("T", " "),
+                "board": d.get("board"), "task": d.get("taskId"),
+                "role": p.get("role"), "runner": p.get("runner"),
+                "provider": p.get("provider"), "model": p.get("model"),
+                "effort": p.get("effort"),
+                "verdict": p.get("verdict") or p.get("status"),
+                "rounds": p.get("review_rounds"),
+                "work_min": p.get("duration_work_min") or p.get("work_minutes"),
+            })
+    # 모델×역할×노력 집계 — 모름(null)은 "모름" 그룹으로 정직하게 남긴다.
+    groups: dict = {}
+    for r in rows:
+        key = (str(r["model"] or "모름"), str(r["role"] or "모름"), str(r["effort"] or "모름"))
+        g = groups.setdefault(key, {"n": 0, "pass": 0, "fail": 0, "verdict_unknown": 0,
+                                    "rounds": [], "work": [], "last": ""})
+        g["n"] += 1
+        v = str(r["verdict"] or "")
+        if "PASS" in v.upper():
+            g["pass"] += 1
+        elif "FAIL" in v.upper():
+            g["fail"] += 1
+        else:
+            g["verdict_unknown"] += 1
+        if isinstance(r["rounds"], (int, float)):
+            g["rounds"].append(r["rounds"])
+        if isinstance(r["work_min"], (int, float)):
+            g["work"].append(r["work_min"])
+        if r["at"] > g["last"]:
+            g["last"] = r["at"]
+    table = []
+    for (model, role, effort), g in groups.items():
+        judged = g["pass"] + g["fail"]
+        table.append({
+            "model": model, "role": role, "effort": effort, "n": g["n"],
+            "pass": g["pass"], "fail": g["fail"], "verdict_unknown": g["verdict_unknown"],
+            "pass_rate": round(g["pass"] / judged * 100) if judged else None,
+            "avg_rounds": round(sum(g["rounds"]) / len(g["rounds"]), 1) if g["rounds"] else None,
+            "avg_work_min": round(sum(g["work"]) / len(g["work"]), 1) if g["work"] else None,
+            "last": g["last"],
+        })
+    table.sort(key=lambda t: -t["n"])
+    recent = sorted(rows, key=lambda r: r["at"], reverse=True)[:40]
+    return {"glob": OUTCOME_GLOB, "files": files, "total": len(rows),
+            "table": table, "recent": recent}
+
+
+# 쿼터 추이 표면 — 이력 원본은 quota-collection-1 판이 만드는 스냅샷 JSONL 이다.
+# 카드(task_2189d6499cce)가 아직 진행 전이라, 후보 경로를 보고 없으면 현재값만 보여준다.
+# 이력 파일이 생기면 아래 후보에 실경로를 등록한다 (추측 금지 — 없으면 없다고 말한다).
+QUOTA_HISTORY_CANDIDATES = [
+    Path.home() / ".cache/rottie/routing-usage-history.jsonl",
+    Path.home() / "Dev/conductor-core/.orca/quota-history.jsonl",
+]
+
+
+def quota_history_view() -> dict:
+    out: dict = {"history_file": None, "series": {}, "current": None, "note": None}
+    try:
+        q = json.loads(QUOTA_FILE.read_text(encoding="utf-8"))
+        out["current"] = {"generatedAt": q.get("generatedAt"), "reports": q.get("reports")}
+    except (OSError, ValueError):
+        pass
+    hist = next((p for p in QUOTA_HISTORY_CANDIDATES if p.exists()), None)
+    if hist is None:
+        out["note"] = ("이력 파일이 아직 없다 — quota-collection-1 판이 스냅샷 수집 카드"
+                       "(task_2189d6499cce)를 진행 중이다. 파일이 생기면 여기 추이가 그려진다.")
+        return out
+    out["history_file"] = str(hist)
+    series: dict = {}
+    try:
+        for line in hist.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                d = json.loads(line, strict=False)
+            except ValueError:
+                continue
+            ts = d.get("collectedAt") or d.get("generatedAt") or d.get("ts")
+            for rep in d.get("reports") or []:
+                prov = rep.get("provider") or "모름"
+                quota = rep.get("quota") or {}
+                for key in ("weeklyPercent", "fiveHourPercent"):
+                    if isinstance(quota.get(key), (int, float)):
+                        series.setdefault(f"{prov}.{key}", []).append(
+                            {"t": ts, "v": quota[key]})
+    except OSError as e:
+        out["note"] = f"이력 파일을 못 읽었다: {e}"
+    out["series"] = series
+    return out
+
+
+def outcomes_txt() -> str:
+    """에이전트 창구 — 집계 요약만 평문으로. 원본 원장은 .orca/routing-events/*.jsonl"""
+    d = outcomes_view()
+    lines = [f"성적 집계 (card_outcome {d['total']}건, 원본 {d['glob']})", "",
+             "모델 | 역할 | 노력 | 카드수 | 통과 | 실패 | 판정모름 | 통과율% | 평균라운드 | 평균작업분"]
+    for t in d["table"]:
+        lines.append(" | ".join(str(t[k]) if t[k] is not None else "모름"
+                                for k in ("model", "role", "effort", "n", "pass", "fail",
+                                          "verdict_unknown", "pass_rate", "avg_rounds", "avg_work_min")))
+    return "\n".join(lines) + "\n"
+
+
 # kyle 메모함 — 대시보드의 유일한 쓰기 경로. 판 카드를 직접 만들지 않는 이유:
 # 카드는 감독이 단일 작성자다. 여기 쌓인 메모는 슈퍼감독이 읽고 알맞은 저장소
 # TODO 나 판 지시로 분배한다 (2026-08-11 kyle 요청).
@@ -1222,6 +1353,7 @@ function renderSide() {
   item("terms", "터미널", DATA.terminals.length);
   item("ledger", "원장 (DB)");
   item("routing", "라우팅");
+  item("scores", "성적");
   item("watchers", "보조 감시", watcherCount());
   item("rules", "규칙");
   item("memo", "메모함", MEMOS ? MEMOS.items.length : undefined);
@@ -1750,6 +1882,153 @@ function watcherTable(entries) {
   return table;
 }
 
+// 성적 탭 — card_outcome 원장 집계 + 쿼터 추이 (2026-08-12 kyle 요청). 원본은
+// .orca/routing-events/*.jsonl 원장과 쿼터 이력 파일이고, 여기는 렌더링만 한다.
+let SCORES = null, QHIST = null;
+
+function barCell(pct, color) {
+  // 순수 CSS 가로 막대 — 표 안에서 비율을 눈으로 비교한다.
+  const wrap = el("div");
+  wrap.style.display = "flex"; wrap.style.alignItems = "center"; wrap.style.gap = "6px";
+  const bar = el("div");
+  bar.style.height = "8px"; bar.style.borderRadius = "4px";
+  bar.style.width = Math.max(2, Math.round(pct)) + "px"; // 1% = 1px, 최대 100px
+  bar.style.background = color;
+  wrap.appendChild(bar);
+  wrap.appendChild(el("span", "dim", pct + "%"));
+  return wrap;
+}
+
+function quotaChart(series) {
+  // 순수 SVG 꺾은선 — provider 별 주간 사용률 추이.
+  const keys = Object.keys(series).filter((k) => series[k].length > 1);
+  const W = 640, H = 220, PAD = 34;
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+  svg.style.width = "100%"; svg.style.maxWidth = W + "px";
+  const colors = { anthropic: "#c9764a", openai: "#6aa9c9", kimi: "#8b7ff0", zai: "#7fc98b" };
+  const mk = (tag, attrs) => {
+    const n = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+    return n;
+  };
+  // 눈금: 0/50/100%
+  for (const pct of [0, 50, 100]) {
+    const y = H - PAD - (H - 2 * PAD) * pct / 100;
+    svg.appendChild(mk("line", { x1: PAD, y1: y, x2: W - 8, y2: y,
+      stroke: "#2a2b30", "stroke-width": 1 }));
+    const t = mk("text", { x: 4, y: y + 4, fill: "#8a8b90", "font-size": 11 });
+    t.textContent = pct + "%"; svg.appendChild(t);
+  }
+  const allT = keys.flatMap((k) => series[k].map((p) => p.t)).filter(Boolean).sort();
+  const t0 = allT[0], t1 = allT[allT.length - 1];
+  const span = (new Date(t1) - new Date(t0)) || 1;
+  let li = 0;
+  for (const k of keys) {
+    const prov = k.split(".")[0];
+    const color = colors[prov] || "#aaa";
+    const pts = series[k].filter((p) => p.t).map((p) => {
+      const x = PAD + (W - PAD - 12) * ((new Date(p.t) - new Date(t0)) / span);
+      const y = H - PAD - (H - 2 * PAD) * Math.min(100, Math.max(0, p.v)) / 100;
+      return x.toFixed(1) + "," + y.toFixed(1);
+    });
+    svg.appendChild(mk("polyline", { points: pts.join(" "), fill: "none",
+      stroke: color, "stroke-width": k.includes("weekly") ? 2 : 1,
+      "stroke-dasharray": k.includes("fiveHour") ? "4 3" : "" }));
+    const lg = mk("text", { x: PAD + 4 + li * 150, y: 14, fill: color, "font-size": 11 });
+    lg.textContent = k.replace(".weeklyPercent", " 주간").replace(".fiveHourPercent", " 5시간(점선)");
+    svg.appendChild(lg); li += 1;
+  }
+  return svg;
+}
+
+async function pageScores(main) {
+  if (SCORES === null) {
+    try {
+      [SCORES, QHIST] = await Promise.all([
+        (await fetch("/api/outcomes")).json(), (await fetch("/api/quota-history")).json()]);
+    } catch (e) { SCORES = { error: String(e), table: [], recent: [] }; QHIST = {}; }
+    render();
+    return;
+  }
+  const head = el("div", "card");
+  head.appendChild(el("h2", null, "성적 — 실행기×모델×노력"));
+  head.appendChild(el("div", "dim row", "card_outcome " + (SCORES.total || 0)
+    + "건 집계. 원본 원장: .orca/routing-events/*.jsonl · 에이전트 창구: curl /outcomes.txt"
+    + " · '모름'은 표준 도입 전 기록 — 지우지 않고 모름으로 둔다"));
+  if (SCORES.error) head.appendChild(el("div", "bad row", "⚠ " + SCORES.error));
+  const table = el("table");
+  const hd = el("tr");
+  for (const t of ["모델", "역할", "노력", "카드", "통과율 (판정된 것 중)", "평균 라운드", "평균 작업분", "판정모름", "마지막"])
+    hd.appendChild(el("th", null, t));
+  table.appendChild(hd);
+  for (const t of SCORES.table || []) {
+    const tr = el("tr");
+    const model = el("td", t.model === "모름" ? "dim" : null, t.model);
+    model.style.whiteSpace = "nowrap";
+    tr.appendChild(model);
+    tr.appendChild(el("td", "dim", t.role));
+    tr.appendChild(el("td", "dim", t.effort));
+    tr.appendChild(el("td", "mono", String(t.n)));
+    const rateTd = el("td");
+    if (t.pass_rate === null) rateTd.appendChild(el("span", "dim", "판정 없음"));
+    else rateTd.appendChild(barCell(t.pass_rate, t.pass_rate >= 70 ? "#7fc98b" : (t.pass_rate >= 40 ? "#c9a86a" : "#c96a6a")));
+    tr.appendChild(rateTd);
+    tr.appendChild(el("td", "dim mono", t.avg_rounds === null ? "모름" : String(t.avg_rounds)));
+    tr.appendChild(el("td", "dim mono", t.avg_work_min === null ? "모름" : String(t.avg_work_min)));
+    tr.appendChild(el("td", "dim mono", String(t.verdict_unknown)));
+    const last = el("td", "dim", t.last || "");
+    last.style.whiteSpace = "nowrap";
+    tr.appendChild(last);
+    table.appendChild(tr);
+  }
+  head.appendChild(table);
+  main.appendChild(head);
+
+  const qcard = el("div", "card");
+  qcard.appendChild(el("h3", null, "쿼터 사용량 추이"));
+  const q = QHIST || {};
+  if (q.history_file && Object.keys(q.series || {}).length) {
+    qcard.appendChild(el("div", "dim row", "원본: " + q.history_file));
+    qcard.appendChild(quotaChart(q.series));
+  } else {
+    if (q.note) qcard.appendChild(el("div", "dim row", q.note));
+    const reps = (q.current || {}).reports || [];
+    if (!reps.length) qcard.appendChild(el("div", "dim row",
+      "현재값 원본(~/.cache/rottie/routing-usage.json)의 reports 가 비어 있다 — Rottie 수집기가 아직 보고 전이거나 방금 재생성됐다."));
+    const tiles = el("div", "tiles");
+    for (const r of reps) {
+      const parts = [];
+      if (r.quota && r.quota.weeklyPercent !== undefined) parts.push("주간 " + r.quota.weeklyPercent + "%");
+      if (r.quota && r.quota.fiveHourPercent !== undefined) parts.push("5시간 " + r.quota.fiveHourPercent + "%");
+      tiles.appendChild(tile(r.provider, parts.join(" · ") || "모름", "현재값 (사용량)"));
+    }
+    qcard.appendChild(tiles);
+  }
+  main.appendChild(qcard);
+
+  const rc = el("div", "card");
+  rc.appendChild(el("h3", null, "최근 정산 40건"));
+  const rt = el("table");
+  const rh = el("tr");
+  for (const t of ["때", "판", "역할", "모델", "노력", "판정", "작업분"]) rh.appendChild(el("th", null, t));
+  rt.appendChild(rh);
+  for (const r of SCORES.recent || []) {
+    const tr = el("tr");
+    const at = el("td", "dim", r.at); at.style.whiteSpace = "nowrap"; tr.appendChild(at);
+    tr.appendChild(el("td", "dim", r.board || ""));
+    tr.appendChild(el("td", "dim", r.role || "모름"));
+    tr.appendChild(el("td", r.model ? null : "dim", r.model || "모름"));
+    tr.appendChild(el("td", "dim", r.effort || "모름"));
+    const v = String(r.verdict || "모름");
+    tr.appendChild(el("td", v.toUpperCase().includes("PASS") ? "ok" : (v.toUpperCase().includes("FAIL") ? "bad" : "dim"), v));
+    tr.appendChild(el("td", "dim mono", r.work_min === null || r.work_min === undefined ? "모름" : String(r.work_min)));
+    rt.appendChild(tr);
+  }
+  rc.appendChild(rt);
+  main.appendChild(rc);
+}
+
 // 깨움 사슬 구조도 — "누가 누구를 지키나"를 층으로 그린다. 실측 데이터(판·감독 모델)를
 // 그대로 꽂으므로 그림도 복제가 아니라 렌더링이다.
 function wakeDiagram() {
@@ -2040,6 +2319,7 @@ function render() {
   else if (r.page === "dormant") pageDormant(main);
   else if (r.page === "memo") pageMemo(main);
   else if (r.page === "routing") pageRouting(main);
+  else if (r.page === "scores") pageScores(main);
   else if (r.page === "watchers") pageWatchers(main);
   else if (r.page === "rules") pageRules(main);
   else pageOverview(main);
@@ -2090,6 +2370,14 @@ def make_handler(cache: Cache):
                     "text/plain; charset=utf-8",
                     status_text(cache.get()).encode(),
                 )
+            elif self.path == "/outcomes.txt":
+                self._send(200, "text/plain; charset=utf-8", outcomes_txt().encode())
+            elif self.path.startswith("/api/outcomes"):
+                body = json.dumps(outcomes_view(), ensure_ascii=False).encode()
+                self._send(200, "application/json; charset=utf-8", body)
+            elif self.path.startswith("/api/quota-history"):
+                body = json.dumps(quota_history_view(), ensure_ascii=False).encode()
+                self._send(200, "application/json; charset=utf-8", body)
             elif self.path == "/watchers.txt":
                 self._send(
                     200,
