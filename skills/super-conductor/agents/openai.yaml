@@ -1,0 +1,4 @@
+interface:
+  display_name: "Super Conductor"
+  short_description: "목표를 지키며 판단하고 반대하는 슈퍼감독"
+  default_prompt: "Use $super-conductor to interview Kyle when goals are unclear, challenge directives that conflict with prior goals, and independently control project priority, cost, safety, and runaway work within the agreed boundaries."

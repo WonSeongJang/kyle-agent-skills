@@ -1,0 +1,4 @@
+version: 1
+display_name: Workflow Bootstrap
+short_description: 다른 저장소에 공통 workflow 코어와 기본 운영 규칙을 설치하고 정규화합니다.
+default_prompt: 다른 프로젝트에 재사용할 workflow 코어를 설치하고, 없으면 기본값으로 세팅되게 정리해줘.

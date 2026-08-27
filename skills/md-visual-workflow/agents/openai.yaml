@@ -1,0 +1,4 @@
+interface:
+  display_name: "MD Visual Workflow"
+  short_description: "Create detailed docs and summary visuals"
+  default_prompt: "Use $md-visual-workflow to turn notes into a layered explanation set: detailed Markdown sources plus visual-spec JSON, HTML/CSS previews, and PNG exports. Include service intro, feature-by-feature user manual, developer handoff, and a plain-language glossary when jargon or acronyms may block general readers."

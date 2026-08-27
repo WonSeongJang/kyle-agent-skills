@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1240" height="1754" viewBox="0 0 1240 1754" role="img" aria-labelledby="title desc">
+<title id="title">Rottie 출시 포스터</title><desc id="desc">깊은 녹색 바닥에 파일, 명령, AI 흐름을 뜻하는 세 개의 대각선 인광 띠와 한국어 제목이 있는 포스터</desc>
+<rect width="1240" height="1754" fill="#0d1711"/>
+<g fill="none" stroke-linecap="square">
+  <path d="M-80 1450 L640 730 L1320 50" stroke="#213329" stroke-width="220"/>
+  <path d="M-120 1580 L605 855 L1320 140" stroke="#9ef48d" stroke-width="54"/>
+  <path d="M-80 1460 L645 735 L1360 20" stroke="#64b6a5" stroke-width="18"/>
+  <path d="M-10 1610 L250 1350" stroke="#f0874a" stroke-width="12"/>
+</g>
+<g font-family="Arial, sans-serif" fill="#edf1e8">
+  <text x="84" y="105" font-family="monospace" font-size="24" letter-spacing="5">ROTTIE / DESKTOP AI IDE</text>
+  <text x="84" y="410" font-size="116" font-weight="800" letter-spacing="-7">생각이 끊기기 전에,</text>
+  <text x="84" y="535" font-size="116" font-weight="800" letter-spacing="-7">코드까지.</text>
+  <text x="88" y="640" font-size="30" fill="#9baaa0">파일을 찾고, 명령을 실행하고, AI와 고친다.</text>
+  <text x="88" y="684" font-size="30" fill="#9baaa0">흩어진 개발 작업을 한 창에 잇습니다.</text>
+</g>
+<g font-family="monospace" font-size="22">
+  <rect x="84" y="1260" width="290" height="70" fill="#17251c" stroke="#435348"/><text x="112" y="1304" fill="#9ef48d">01 / FILE</text>
+  <rect x="404" y="1135" width="290" height="70" fill="#17251c" stroke="#435348"/><text x="432" y="1179" fill="#9ef48d">02 / TERMINAL</text>
+  <rect x="724" y="1010" width="290" height="70" fill="#17251c" stroke="#435348"/><text x="752" y="1054" fill="#9ef48d">03 / AI</text>
+  <text x="84" y="1660" fill="#edf1e8">ONE WINDOW / ONE CONTEXT / LOCAL FIRST</text>
+  <text x="1015" y="1660" fill="#f0874a">→ RUN</text>
+</g></svg>

@@ -1,0 +1,4 @@
+version: 1
+display_name: Grill Me
+short_description: 계획, 아이디어, 설계, 의사결정을 집요하게 질문해 합의된 이해까지 끌고 갑니다.
+default_prompt: 이 주제를 grill me 방식으로 검토해줘. 확인 가능한 사실은 먼저 정리하고, 각 질문마다 추천 답안을 같이 줘.

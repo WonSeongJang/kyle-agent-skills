@@ -1,0 +1,4 @@
+interface:
+  display_name: "Growth Tracking Playbook"
+  short_description: "검색 유입, 행동 추적, UTM, 짧은 링크 운영 스킬"
+  default_prompt: "Use $growth-tracking-playbook to design search attribution, internal analytics, UTM rules, and short share links for this service."

@@ -11,6 +11,49 @@ PROJECT_SEND_LOG="$STATE_DIR/project-sends.log"
 ROSTER_LOG="$STATE_DIR/roster.log"
 ACK_LOG="$STATE_DIR/acks.log"
 
+# roster 응답의 판 신분 필드. 기본은 현재 판과 일치하고, 신분 불일치 시나리오 env 로
+# 특정 역할의 특정 필드만 어긋나게 만들 수 있다.
+identity_values() {
+  identity_project=project_test
+  identity_board=board_test
+  identity_run="${FAKE_RUN_ID:-run_project}"
+  identity_role="$1"
+  identity_status=active
+  identity_lifecycle=active
+  identity_live=true
+  identity_result_live=true
+  if [ "$1" = relay ]; then
+    identity_pane=pane_relay
+  elif case "$1" in developer*|reviewer*|researcher*|investigator*) true;; *) false;; esac; then
+    identity_pane="${FAKE_WORKER_PANE:-pane_worker}"
+  else
+    identity_pane=pane_supervisor
+  fi
+  if [ "$MODE" = start_wrong_relay ] && [ "$1" = relay ]; then
+    identity_project=other_project
+    identity_board=other_board
+    identity_run=other_run
+  fi
+  if [ "${FAKE_ROSTER_WRONG_IDENTITY_ROLE:-}" = "$1" ] || [ "${FAKE_RESOLVE_WRONG_IDENTITY_ROLE:-}" = "$1" ]; then
+    identity_project=other_project
+    identity_board=other_board
+    identity_run=other_run
+  fi
+  if [ "${FAKE_ROSTER_BAD_FIELD_ROLE:-project-supervisor}" = "$1" ]; then
+    case "${FAKE_ROSTER_BAD_FIELD:-}" in
+      project) identity_project=other_project ;;
+      board) identity_board=other_board ;;
+      role) identity_role=other_role ;;
+      run) identity_run=other_run ;;
+      status) identity_status=inactive ;;
+      lifecycle) identity_lifecycle=closed ;;
+      live) identity_live=false ;;
+      result_live) identity_result_live=false ;;
+      pane) identity_pane="" ;;
+    esac
+  fi
+}
+
 log_call() {
   printf '%s\n' "$*" >> "$CALLS"
 }
@@ -47,6 +90,34 @@ candidate_delivery() {
   esac
 }
 
+# F-B11-3: companion 이 실제로 만들어 올리는 구조 알림 편지 한 통을 그대로 재현한다.
+# 위조 변형은 SA_* env 로 한 칸씩만 어긋나게 만든다(무엇 때문에 거부됐는지 1:1 로 보이게).
+shape_alert_body() {
+  printf 'companion이 우편함에서 모양이 깨진 편지 1통을 격리했습니다. 원문(제목·본문·payload·카드 식별자)은 싣지 않습니다. board=%s deliveryRef=%s index=%s type=%s reason=%s. 정상 형제 편지는 그대로 처리했고 큐는 막히지 않았습니다.' "$1" "$2" "$3" "$4" "$5"
+}
+shape_alert_letter() {
+  local mid="$1"
+  local sender="${SA_SENDER:-term_supervisor}" pane="${SA_PANE-pane_supervisor}"
+  local ltype="${SA_TYPE:-escalation}" board="${SA_BOARD:-board_test}"
+  local subject="${SA_SUBJECT:-message_shape_quarantined:board_test}"
+  local ref="${SA_REF:-a1b2c3d4e5f6}" index="${SA_INDEX-0}"
+  local mtype="${SA_MTYPE:-escalation}" reason="${SA_REASON:-message_id_type}"
+  local body="${SA_BODY-}" extra="${SA_EXTRA:-}" pane_json="" id_key=message_id sender_key=sender_handle
+  [ -n "$body" ] || body=$(shape_alert_body "$board" "$ref" "$index" "$mtype" "$reason")
+  [ -n "$pane" ] && pane_json=",\"sender_pane_key\":\"$pane\""
+  if [ "${SA_ALIAS:-0}" = 1 ]; then id_key=messageId; sender_key=sender; fi
+  printf '{"%s":"%s","type":"%s","%s":"%s"%s,"subject":"%s","body":"%s","payload":{"messageShapeQuarantined":true,"board":"%s","deliveryRef":"%s","index":"%s","messageType":"%s","reason":"%s"%s}}' \
+    "$id_key" "$mid" "$ltype" "$sender_key" "$sender" "$pane_json" "$subject" "$body" \
+    "$board" "$ref" "$index" "$mtype" "$reason" "$extra"
+}
+# 위조 알림과 같은 Delivery 에 실리는 정상 형제. 위조 거부가 큐를 막지 않는지 본다.
+shape_good_sibling() {
+  printf '{"message_id":"good_beside_forged","type":"question","sender_handle":"term_worker","subject":"good question beside the forged alert","payload":{"task_id":"task_good","dispatch_id":"ctx_good"}}'
+}
+shape_forged_delivery() {
+  printf '{"result":{"deliveryId":"delivery_shape_forged","messages":[%s,%s]}}\n' "$(shape_alert_letter shape_alert_forged)" "$(shape_good_sibling)"
+}
+
 if [ "${1:-}" = "roster" ] && [ "${2:-}" = "resolve" ]; then
   role=""
   previous=""
@@ -55,12 +126,158 @@ if [ "${1:-}" = "roster" ] && [ "${2:-}" = "resolve" ]; then
     previous="$argument"
   done
   printf '%s %s %s\n' resolve "$role" "$*" >> "$ROSTER_LOG"
+  identity_values "$role"
   if [ "$role" = "relay" ]; then
     handle="${FAKE_RELAY_HANDLE:-term_relay}"
-    printf '%s\n' "{\"result\":{\"member\":{\"project\":\"project_test\",\"board\":\"board_test\",\"role\":\"relay\",\"runId\":\"run_project\",\"currentHandle\":\"$handle\"},\"currentHandle\":\"$handle\",\"live\":true}}"
+  elif case "$role" in developer*|reviewer*|researcher*|investigator*) true;; *) false;; esac; then
+    # Per-role worker handle (R2 중요1): 역할별 env 가 우선, 없으면 공통 FAKE_WORKER_HANDLE.
+    case "$role" in
+      developer*) handle="${FAKE_WORKER_HANDLE_DEVELOPER:-${FAKE_WORKER_HANDLE:-}}" ;;
+      reviewer*) handle="${FAKE_WORKER_HANDLE_REVIEWER:-${FAKE_WORKER_HANDLE:-}}" ;;
+      researcher*) handle="${FAKE_WORKER_HANDLE_RESEARCHER:-${FAKE_WORKER_HANDLE:-}}" ;;
+      investigator*) handle="${FAKE_WORKER_HANDLE_INVESTIGATOR:-${FAKE_WORKER_HANDLE:-}}" ;;
+    esac
   else
-    handle="${FAKE_SUPERVISOR_HANDLE:-term_supervisor}"
-    printf '%s\n' "{\"result\":{\"member\":{\"project\":\"project_test\",\"board\":\"board_test\",\"role\":\"project-supervisor\",\"runId\":\"run_project\",\"currentHandle\":\"$handle\"},\"currentHandle\":\"$handle\",\"live\":true}}"
+    resolve_count=$(cat "$STATE_DIR/supervisor-resolve-count" 2>/dev/null || printf '0')
+    resolve_count=$((resolve_count + 1))
+    printf '%s\n' "$resolve_count" > "$STATE_DIR/supervisor-resolve-count"
+    # F-B11-3: 편지를 배달한 바로 다음 supervisor resolve 만 못 찾게 만든다. 소비 시점에
+    # 신분이 UNKNOWN 이 되는 상황(캐시된 옛 handle 만 믿으면 통과해버리는 자리)을 만들되,
+    # 그 뒤 정상 형제 깨우기와 ack 은 계속 흐르게 둔다.
+    if [ -f "$STATE_DIR/roster-fail-now" ]; then
+      remaining=$(cat "$STATE_DIR/roster-fail-now" 2>/dev/null || printf '0')
+      if [ "${remaining:-0}" -gt 0 ]; then
+        printf '%s\n' "$((remaining - 1))" > "$STATE_DIR/roster-fail-now"
+        printf '%s\n' 'role_roster_not_found' >&2
+        exit 1
+      fi
+    fi
+    fail_after="${FAKE_SUPERVISOR_RESOLVE_FAIL_AFTER:-0}"
+    if [ "$fail_after" -gt 0 ] && [ "$resolve_count" -gt "$fail_after" ]; then
+      printf '%s\n' 'role_roster_not_found' >&2
+      exit 1
+    fi
+    # 특정 순번의 resolve 만 실패시킨다. owner mismatch 와 roster 실패를 섞는
+    # 교차 시나리오에서 쓴다(한 줄에 실패시킬 resolve 순번 하나).
+    fail_seq_file="$STATE_DIR/supervisor-resolve-fail-seq"
+    if [ -f "$fail_seq_file" ] && grep -qx "$resolve_count" "$fail_seq_file"; then
+      printf '%s\n' 'role_roster_not_found' >&2
+      exit 1
+    fi
+    seq_file="$STATE_DIR/supervisor-handle-seq"
+    if [ -f "$seq_file" ]; then
+      handle=$(sed -n "${resolve_count}p" "$seq_file")
+      [ -n "$handle" ] || handle=$(tail -1 "$seq_file")
+    else
+      handle="${FAKE_SUPERVISOR_HANDLE:-term_supervisor}"
+    fi
+  fi
+  result_handle="$handle"
+  if [ "${FAKE_ROSTER_BAD_FIELD_ROLE:-project-supervisor}" = "$role" ] && [ "${FAKE_ROSTER_BAD_FIELD:-}" = handle ]; then
+    result_handle=term_other_window
+  fi
+  printf '%s\n' "{\"ok\":true,\"result\":{\"member\":{\"project\":\"$identity_project\",\"board\":\"$identity_board\",\"role\":\"$identity_role\",\"runId\":\"$identity_run\",\"pane\":\"$identity_pane\",\"status\":\"$identity_status\",\"lifecycle\":\"$identity_lifecycle\",\"live\":$identity_live,\"currentHandle\":\"$handle\"},\"currentHandle\":\"$result_handle\",\"live\":$identity_result_live}}"
+  exit 0
+fi
+
+if [ "${1:-}" = "roster" ] && [ "${2:-}" = "list" ]; then
+  role=""
+  roster_status=""
+  previous=""
+  for argument in "$@"; do
+    if [ "$previous" = "--role" ]; then role="$argument"; fi
+    if [ "$previous" = "--status" ]; then roster_status="$argument"; fi
+    previous="$argument"
+  done
+ log_call "$*"
+  # R3 중요1: --role 없이 전체 active 멤버를 반환한다(worker 역할 발견용).
+  # 시험에서 FAKE_ROSTER_ALL_MEMBERS 파일로 멤버 목록을 제어한다.
+  # 없으면 supervisor + relay + env 제어 worker 멤버를 합친다.
+  if [ -z "$role" ]; then
+    if [ -f "$STATE_DIR/roster_all_members.json" ]; then
+      cat "$STATE_DIR/roster_all_members.json"
+    else
+      identity_values project-supervisor
+      sup_member="{\"id\":\"roster_sup\",\"project\":\"$identity_project\",\"board\":\"$identity_board\",\"role\":\"project-supervisor\",\"runId\":\"$identity_run\",\"pane\":\"$identity_pane\",\"status\":\"active\",\"lifecycle\":\"active\",\"live\":true,\"currentHandle\":\"term_supervisor\"}"
+      identity_values relay
+      relay_member="{\"id\":\"roster_relay\",\"project\":\"$identity_project\",\"board\":\"$identity_board\",\"role\":\"relay\",\"runId\":\"$identity_run\",\"pane\":\"pane_relay\",\"status\":\"active\",\"lifecycle\":\"active\",\"live\":true,\"currentHandle\":\"${FAKE_RELAY_HANDLE:-term_relay}\"}"
+      members="$sup_member,$relay_member"
+      wr="${FAKE_WORKER_ROLE:-}"
+      wh="${FAKE_WORKER_HANDLE:-}"
+      wp="${FAKE_WORKER_PANE:-pane_worker}"
+      if [ -n "$wr" ] && [ -n "$wh" ]; then
+        members="$members,{\"id\":\"roster_worker\",\"project\":\"$identity_project\",\"board\":\"$identity_board\",\"role\":\"$wr\",\"runId\":\"$identity_run\",\"pane\":\"$wp\",\"status\":\"active\",\"lifecycle\":\"active\",\"live\":true,\"currentHandle\":\"$wh\"}"
+      fi
+      printf '%s\n' "{\"ok\":true,\"result\":{\"members\":[$members]}}"
+    fi
+    exit 0
+  fi
+ # GATE_NUDGE 발신 창 이력 조회: supervisor의 inactive/retired 이력은 기본 비어 있고,
+ # FAKE_SUPERVISOR_RETIRED_PANE가 있으면 그 pane의 retired member를 돌려준다
+ # (세션 교대 전 정상 발송 편지가 새 감독 인수 뒤에도 유효한 수명 규칙 시험용).
+ # 실물 RoleRosterMember 계약: retired 행의 권위 핸들은 currentHandle 이 아니라
+ # lastSeenHandle 이다 — currentHandle 은 pane 재사용 시 현재 live 핸들을 가리키므로
+ # retired 는 currentHandle=null,lastSeenHandle=교대 전 핸들 로 표현한다.
+ if [ "$role" = project-supervisor ] && [ "$roster_status" = inactive ]; then
+    printf '%s\n' '{"ok":true,"result":{"members":[]}}'
+    exit 0
+  fi
+  if [ "$role" = project-supervisor ] && [ "$roster_status" = retired ]; then
+    if [ -n "${FAKE_SUPERVISOR_RETIRED_PANE:-}" ]; then
+      if [ "${FAKE_ROSTER_LIST_RETIRED_BAD:-0}" = "1" ]; then
+        # retired 행이 불명확한 이력(권위 핸들 lastSeenHandle 없음)이면 wake 0 회귀.
+        printf '%s\n' "{\"ok\":true,\"result\":{\"members\":[{\"id\":\"roster_supervisor_retired\",\"pane\":\"$FAKE_SUPERVISOR_RETIRED_PANE\",\"project\":\"project_test\",\"board\":\"board_test\",\"role\":\"project-supervisor\",\"runId\":\"run_project\",\"status\":\"retired\",\"lifecycle\":\"retired\",\"live\":false,\"currentHandle\":null}]}}"
+      else
+        printf '%s\n' "{\"ok\":true,\"result\":{\"members\":[{\"id\":\"roster_supervisor_retired\",\"pane\":\"$FAKE_SUPERVISOR_RETIRED_PANE\",\"project\":\"project_test\",\"board\":\"board_test\",\"role\":\"project-supervisor\",\"runId\":\"run_project\",\"status\":\"retired\",\"lifecycle\":\"retired\",\"live\":false,\"currentHandle\":null,\"lastSeenHandle\":\"term_old_supervisor\"}]}}"
+      fi
+    else
+      printf '%s\n' '{"ok":true,"result":{"members":[]}}'
+    fi
+    exit 0
+  fi
+  if [ "$role" = relay ] && { [ "$MODE" = start_missing_relay ] || [ "$MODE" = start_duplicate_missing_relay ]; }; then
+    printf '%s\n' '{"ok":true,"result":{"members":[]}}'
+    exit 0
+  fi
+  if [ "$role" = relay ] || [ "$role" = project-supervisor ]; then
+    identity_values "$role"
+    handle=term_relay
+    [ "$role" = project-supervisor ] && handle=term_supervisor
+    # roster list 전용 회귀 오버라이드: resolve 는 정상으로 두고 supervisor 의 list
+    # 응답만 특정 방식으로 깨뜨린다(GATE_NUDGE roster 권위 회귀 시험용).
+    list_pane="$identity_pane"
+    list_status="$identity_status"
+    list_lifecycle="$identity_lifecycle"
+    list_live="$identity_live"
+    list_handle="$handle"
+    if [ "$role" = project-supervisor ]; then
+      case "${FAKE_ROSTER_LIST_BAD_FIELD:-}" in
+        status) list_status=inactive ;;
+        lifecycle) list_lifecycle=stale ;;
+        live) list_live=false ;;
+        handle) list_handle=term_other_window ;;
+        pane) list_pane="" ;;
+      esac
+      if [ "${FAKE_ROSTER_LIST_EMPTY_ACTIVE:-0}" = "1" ] && [ "$roster_status" = active ]; then
+        printf '%s\n' '{"ok":true,"result":{"members":[]}}'
+        exit 0
+      fi
+      if [ "${FAKE_ROSTER_LIST_MALFORMED:-0}" = "1" ]; then
+        printf '%s\n' '{"ok":true,"result":{"members":["oops"]}}'
+        exit 0
+      fi
+      if [ "${FAKE_ROSTER_LIST_OK_FALSE:-0}" = "1" ]; then
+        printf '%s\n' "{\"ok\":false,\"result\":{\"members\":[{\"id\":\"roster_$role\",\"pane\":\"$list_pane\",\"project\":\"$identity_project\",\"board\":\"$identity_board\",\"role\":\"$identity_role\",\"runId\":\"$identity_run\",\"status\":\"$list_status\",\"lifecycle\":\"$list_lifecycle\",\"live\":$list_live,\"currentHandle\":\"$list_handle\"}]}}"
+        exit 0
+      fi
+    fi
+    member="{\"id\":\"roster_$role\",\"pane\":\"$list_pane\",\"project\":\"$identity_project\",\"board\":\"$identity_board\",\"role\":\"$identity_role\",\"runId\":\"$identity_run\",\"status\":\"$list_status\",\"lifecycle\":\"$list_lifecycle\",\"live\":$list_live,\"currentHandle\":\"$list_handle\"}"
+    if [ "${FAKE_ROSTER_MULTIPLE_ROLE:-}" = "$role" ]; then
+      member="$member,{\"id\":\"roster_${role}_duplicate\",\"pane\":\"$list_pane\",\"project\":\"$identity_project\",\"board\":\"$identity_board\",\"role\":\"$identity_role\",\"runId\":\"$identity_run\",\"status\":\"$list_status\",\"lifecycle\":\"$list_lifecycle\",\"live\":$list_live,\"currentHandle\":\"$list_handle\"}"
+    fi
+    printf '%s\n' "{\"ok\":true,\"result\":{\"members\":[$member]}}"
+  else
+    printf '%s\n' '{"ok":true,"result":{"members":[]}}'
   fi
   exit 0
 fi
@@ -68,6 +285,21 @@ fi
 if [ "${1:-}" = "terminal" ] && [ "${2:-}" = "send" ]; then
   log_call "$*"
   printf '%s\n' "$*" >> "$SEND_LOG"
+  # F-B11-3: 특정 문구의 직접 깨우기만 골라서 실패시킨다. 정상 형제 깨우기는 그대로 두고
+  # 비상 경로 한 줄만 막아, 실패가 조용히 묻히는지 아니면 소비되는지 가려낸다.
+  if [ -n "${FAKE_SEND_FAIL_TEXT_MATCH:-}" ]; then
+    case "$*" in
+      *"$FAKE_SEND_FAIL_TEXT_MATCH"*)
+        if [ "${FAKE_SEND_FAIL_TEXT_ONCE:-0}" = 1 ] && [ -f "$STATE_DIR/send_text_failed_once" ]; then
+          :
+        else
+          [ "${FAKE_SEND_FAIL_TEXT_ONCE:-0}" != 1 ] || : > "$STATE_DIR/send_text_failed_once"
+          printf '%s\n' send_text_failed >&2
+          exit 7
+        fi
+        ;;
+    esac
+  fi
   case " $* " in
     *" --enter "*) [ "${FAKE_ENTER_MODE:-ok}" != fail ] || exit 7 ;;
   esac
@@ -97,7 +329,66 @@ if [ "${1:-}" = "terminal" ] && [ "${2:-}" = "read" ]; then
   exit 0
 fi
 
+if [ "${1:-}" = "orchestration" ] && [ "${2:-}" = "run-show" ]; then
+  log_call "$*"
+  if [ "${FAKE_RUN_SHOW_FAIL:-0}" = "1" ]; then
+    printf '%s\n' 'run_show_failed' >&2
+    exit 1
+  fi
+  show_id=""
+  previous=""
+  for argument in "$@"; do
+    [ "$previous" = "--id" ] && show_id="$argument"
+    previous="$argument"
+  done
+  show_count=$(cat "$STATE_DIR/coordinator-show-count" 2>/dev/null || printf '0')
+  show_count=$((show_count + 1))
+  printf '%s\n' "$show_count" > "$STATE_DIR/coordinator-show-count"
+  coord_seq="$STATE_DIR/coordinator-handle-seq"
+  coord_pane_seq="$STATE_DIR/coordinator-pane-seq"
+  if [ -f "$coord_seq" ]; then
+    coord_handle=$(sed -n "${show_count}p" "$coord_seq")
+    [ -n "$coord_handle" ] || coord_handle=$(tail -1 "$coord_seq")
+  else
+    coord_handle="${FAKE_SUPER_COORDINATOR_HANDLE:-term_super_coord}"
+  fi
+  if [ -f "$coord_pane_seq" ]; then
+    coord_pane=$(sed -n "${show_count}p" "$coord_pane_seq")
+    [ -n "$coord_pane" ] || coord_pane=$(tail -1 "$coord_pane_seq")
+  else
+    # `-` 형태라 빈 문자열을 명시하면 pane 없는 run-show 응답을 재현한다.
+    coord_pane="${FAKE_SUPER_COORDINATOR_PANE-pane_super_coord}"
+  fi
+  # 요청한 --super-run 과 다른 Run 을 돌려주는 공격 재현용 override.
+  run_show_id="${FAKE_SUPER_RUN_SHOW_ID-${show_id:-run_super}}"
+  printf '%s\n' "{\"result\":{\"run\":{\"id\":\"$run_show_id\",\"coordinator_handle\":\"$coord_handle\",\"coordinator_pane_key\":\"$coord_pane\",\"consumer_generation\":1}}}"
+  exit 0
+fi
+
+if [ "${1:-}" = "orchestration" ] && [ "${2:-}" = "task-list" ]; then
+  # P3B worker_done_auto roundId 도출용 카드 체인. 시나리오 파일로 제어(없으면 빈 목록).
+  cat "$STATE_DIR/task_list.json" 2>/dev/null || printf '%s\n' '{"result":{"tasks":[]}}'
+  exit 0
+fi
+
+if [ "${1:-}" = "orchestration" ] && [ "${2:-}" = "dispatch-show" ]; then
+  # P3B 발령 영수증 대조용. 시나리오 파일로 제어(없으면 빈 dispatch).
+  cat "$STATE_DIR/dispatch_show.json" 2>/dev/null || printf '%s\n' '{"result":{"dispatch":{}}}'
+  exit 0
+fi
+
 if [ "${1:-}" = "orchestration" ] && [ "${2:-}" = "check" ]; then
+  # capability probe: check --help. FAKE_WAIT_SUPPORT(기본 0)가 1 이면 --wait 를 포함한다.
+  # 기본 0 인 이유: 실제 orca 와 달리 기존 시험들이 폴링(폴백) 경로를 검사하도록 유지.
+  for _a in "$@"; do
+    [ "$_a" = "--help" ] && {
+      if [ "${FAKE_WAIT_SUPPORT:-0}" = 1 ]; then
+        printf '%s\n' '  --wait    block until a matching message arrives or --timeout-ms expires'
+      fi
+      printf '%s\n' '  --json    emit machine-readable JSON'
+      exit 0
+    }
+  done
   log_call "$*"
   previous=""
   ack=""
@@ -107,11 +398,36 @@ if [ "${1:-}" = "orchestration" ] && [ "${2:-}" = "check" ]; then
     [ "$previous" = "--run" ] && requested_run="$argument"
     previous="$argument"
   done
+  # --wait 흉내: --wait 가 있고 FAKE_WAIT_SUPPORT=1 이면 keepalive 한 줄을 stderr 로 내고
+  # FAKE_WAIT_DELAY(기본 0)초 쉬어 실제 대기 시간을 흉내낸다(시험 루프 페이싱 + 생존 신호).
+  for _a in "$@"; do
+    if [ "$_a" = "--wait" ] && [ "${FAKE_WAIT_SUPPORT:-0}" = 1 ]; then
+      printf '%s\n' '{"_keepalive":true,"_heartbeat":true,"elapsedMs":15001,"deadlineMs":60000}' >&2
+      [ "${FAKE_WAIT_DELAY:-0}" != 0 ] && sleep "${FAKE_WAIT_DELAY:-0}"
+      break
+    fi
+  done
   if [ -n "$ack" ]; then
     printf '%s\n' "$ack" >> "$ACK_LOG"
-    case "$ack" in
+    # B11: ack 첫 시도만 실패시키는 스위치. 실패한 ack 은 phase 를 넘기지 않으므로 같은
+    # Delivery 가 그대로 다시 배달된다(재시도 경로 재현). 두 번째 시도부터는 정상.
+   if [ "${FAKE_ACK_FAIL_ONCE:-0}" = 1 ] && [ ! -f "$STATE_DIR/ack_failed_once" ]; then
+     : > "$STATE_DIR/ack_failed_once"
+     printf '%s\n' ack_failed >&2
+     exit 9
+   fi
+    # H2(I-COMPANION-MAIN): ack 를 계속 실패시키는 스위치. phase 를 올리지 않으므로
+    # 같은 배치가 매 check 에서 즉시 재생된다(미확인 배치 재생 고리). 한 번만 실패하는
+    # FAKE_ACK_FAIL_ONCE 와는 다른 값이다 — companion wait/fallback 시험(H2)이 쓴다.
+    if [ "${FAKE_ACK_FAIL:-0}" = 1 ]; then
+      printf '%s\n' '{"error":{"code":"ack_rejected"}}' >&2
+      exit 9
+    fi
+   case "$ack" in
       delivery_1) printf '1\n' > "$STATE_DIR/phase" ;;
       delivery_2) printf '2\n' > "$STATE_DIR/phase" ;;
+      delivery_super_handover_1) printf '1\n' > "$STATE_DIR/phase" ;;
+      delivery_super_handover_2) printf '2\n' > "$STATE_DIR/phase" ;;
       *) printf '1\n' > "$STATE_DIR/phase" ;;
     esac
     printf '%s\n' '{"result":{"acknowledged":true}}'
@@ -121,27 +437,29 @@ if [ "${1:-}" = "orchestration" ] && [ "${2:-}" = "check" ]; then
     printf '%s\n' consumer_fenced >&2
     exit 9
   fi
-  if [ "$requested_run" != run_project ]; then
+  if [ "$requested_run" != "${FAKE_RUN_ID:-run_project}" ]; then
     printf '%s\n' '{"result":{"deliveryId":null,"messages":[],"count":0}}'
     exit 0
   fi
   current_phase=$(phase)
   effective_mode="$DELIVERY_MODE"
-  if [ "$DELIVERY_MODE" = none ] && [[ "$MODE" == candidate_* ]]; then
+  if [ "$DELIVERY_MODE" = none ] && { [[ "$MODE" == candidate_* ]] || [[ "$MODE" == state_* ]] || [[ "$MODE" == start_* ]]; }; then
     effective_mode="$MODE"
   fi
-  if [ "$DELIVERY_MODE" = none ] && [[ "$MODE" != candidate_* ]]; then
+  if [ "$DELIVERY_MODE" = none ] && [[ "$MODE" != candidate_* ]] && [[ "$MODE" != state_* ]] && [[ "$MODE" != start_* ]]; then
     printf '%s\n' '{"result":{"deliveryId":null,"messages":[],"count":0}}'
     exit 0
-  fi
-  if [ "$current_phase" -ne 0 ] && [ "$effective_mode" != fifo -o "$current_phase" -ne 1 ]; then
+ fi
+  serve_phase1=no
+  case "$effective_mode" in fifo|super_handover) serve_phase1=yes ;; esac
+  if [ "$current_phase" -ne 0 ] && { [ "$serve_phase1" = no ] || [ "$current_phase" -ne 1 ]; }; then
     printf '%s\n' '{"result":{"messages":[]}}'
     exit 0
   fi
   case "$effective_mode" in
     fifo)
       if [ "$current_phase" -eq 0 ]; then
-        printf '%s\n' '{"result":{"deliveryId":"delivery_1","messages":[{"message_id":"msg_1","type":"escalation","sender_handle":"term_worker","subject":"needs help","payload":{"task_id":"task_1","dispatch_id":"ctx_1"}},{"messageId":"msg_1_dup","type":"escalation","sender":"term_worker","subject":"duplicate","payload":{"taskId":"task_1","dispatchId":"ctx_1"}},{"id":"relay_1","type":"worker_done","from":"term_relay","payload":{"taskId":"relay_card","dispatchId":"ctx_relay"}}]}}'
+        printf '%s\n' '{"result":{"deliveryId":"delivery_1","messages":[{"message_id":"msg_1","type":"escalation","sender_handle":"term_worker","subject":"needs help","payload":{"task_id":"task_1","dispatch_id":"ctx_1"}},{"messageId":"msg_1","type":"escalation","sender":"term_worker","subject":"same message replayed","payload":{"taskId":"task_1","dispatchId":"ctx_1"}},{"id":"relay_1","type":"worker_done","from":"term_relay","payload":{"taskId":"relay_card","dispatchId":"ctx_relay"}}]}}'
       else
         printf '%s\n' '{"result":{"deliveryId":"delivery_2","messages":[{"id":"msg_2","type":"decision_gate","fromHandle":"term_worker","subject":"choose","payload":{"taskId":"task_2","dispatchId":"ctx_2"}}]}}'
       fi
@@ -149,8 +467,151 @@ if [ "${1:-}" = "orchestration" ] && [ "${2:-}" = "check" ]; then
     malformed_mix)
       printf '%s\n' '{"result":{"deliveryId":"delivery_1","messages":[{"message_id":"bad_1","type":"escalation","sender_handle":"term_worker","subject":"missing ids","payload":{}}]}}'
       ;;
+    lifecycle_question_two)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_question_two","messages":[{"message_id":"question_1","type":"question","sender_handle":"term_worker","subject":"first question: choose A or B","payload":{"task_id":"task_same","dispatch_id":"ctx_same"}},{"message_id":"question_2","type":"question","sender_handle":"term_worker","subject":"second question: keep or stage the file","payload":{"task_id":"task_same","dispatch_id":"ctx_same"}}]}}'
+      ;;
+    lifecycle_question_replay)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_question_replay","messages":[{"message_id":"question_same","type":"question","sender_handle":"term_worker","subject":"one question","payload":{"task_id":"task_same","dispatch_id":"ctx_same"}},{"message_id":"question_same","type":"question","sender_handle":"term_worker","subject":"one question replayed","payload":{"task_id":"task_same","dispatch_id":"ctx_same"}}]}}'
+      ;;
+    lifecycle_escalation_two)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_escalation_two","messages":[{"message_id":"escalation_1","type":"escalation","sender_handle":"term_worker","subject":"first blocker","payload":{"task_id":"task_same","dispatch_id":"ctx_same"}},{"message_id":"escalation_2","type":"escalation","sender_handle":"term_worker","subject":"second blocker","payload":{"task_id":"task_same","dispatch_id":"ctx_same"}}]}}'
+      ;;
+    # B11: 같은 messageId 라도 생명주기 type 이 다르면 서로 다른 편지다. 각각 1회씩 깨워야 한다.
+    lifecycle_cross_type)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_cross_type","messages":[{"message_id":"cross_same","type":"question","sender_handle":"term_worker","subject":"question with shared id","payload":{"task_id":"task_same","dispatch_id":"ctx_same"}},{"message_id":"cross_same","type":"escalation","sender_handle":"term_worker","subject":"escalation with shared id","payload":{"task_id":"task_same","dispatch_id":"ctx_same"}}]}}'
+      ;;
+    lifecycle_ask_two)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_ask_two","messages":[{"message_id":"ask_1","type":"ask","sender_handle":"term_worker","subject":"first ask","payload":{"task_id":"task_same","dispatch_id":"ctx_same"}},{"message_id":"ask_2","type":"ask","sender_handle":"term_worker","subject":"second ask","payload":{"task_id":"task_same","dispatch_id":"ctx_same"}}]}}'
+      ;;
+    lifecycle_decision_gate_two)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_decision_gate_two","messages":[{"message_id":"gate_1","type":"decision_gate","sender_handle":"term_worker","subject":"first gate","payload":{"task_id":"task_same","dispatch_id":"ctx_same"}},{"message_id":"gate_2","type":"decision_gate","sender_handle":"term_worker","subject":"second gate","payload":{"task_id":"task_same","dispatch_id":"ctx_same"}}]}}'
+      ;;
+    # B11 불량 messageId 7종. 각 배달은 [불량 편지, 정상 question] 순서다. 불량 한 통이
+    # 뒤의 정상 편지를 막으면 안 되고, 불량 편지로 감독을 깨워서도 안 된다.
+    malformed_id_empty)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_bad_id","messages":[{"message_id":"","type":"escalation","sender_handle":"term_worker","subject":"empty id","payload":{"task_id":"task_bad","dispatch_id":"ctx_bad"}},{"message_id":"good_after_bad","type":"question","sender_handle":"term_worker","subject":"good question behind the bad one","payload":{"task_id":"task_good","dispatch_id":"ctx_good"}}]}}'
+      ;;
+    malformed_id_missing)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_bad_id","messages":[{"type":"escalation","sender_handle":"term_worker","subject":"no id field","payload":{"task_id":"task_bad","dispatch_id":"ctx_bad"}},{"message_id":"good_after_bad","type":"question","sender_handle":"term_worker","subject":"good question behind the bad one","payload":{"task_id":"task_good","dispatch_id":"ctx_good"}}]}}'
+      ;;
+    malformed_id_null)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_bad_id","messages":[{"message_id":null,"type":"escalation","sender_handle":"term_worker","subject":"null id","payload":{"task_id":"task_bad","dispatch_id":"ctx_bad"}},{"message_id":"good_after_bad","type":"question","sender_handle":"term_worker","subject":"good question behind the bad one","payload":{"task_id":"task_good","dispatch_id":"ctx_good"}}]}}'
+      ;;
+    malformed_id_object)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_bad_id","messages":[{"message_id":{"bad":1},"type":"escalation","sender_handle":"term_worker","subject":"object id","payload":{"task_id":"task_bad","dispatch_id":"ctx_bad"}},{"message_id":"good_after_bad","type":"question","sender_handle":"term_worker","subject":"good question behind the bad one","payload":{"task_id":"task_good","dispatch_id":"ctx_good"}}]}}'
+      ;;
+    malformed_id_array)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_bad_id","messages":[{"message_id":["bad"],"type":"escalation","sender_handle":"term_worker","subject":"array id","payload":{"task_id":"task_bad","dispatch_id":"ctx_bad"}},{"message_id":"good_after_bad","type":"question","sender_handle":"term_worker","subject":"good question behind the bad one","payload":{"task_id":"task_good","dispatch_id":"ctx_good"}}]}}'
+      ;;
+    malformed_id_number)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_bad_id","messages":[{"message_id":42,"type":"escalation","sender_handle":"term_worker","subject":"number id","payload":{"task_id":"task_bad","dispatch_id":"ctx_bad"}},{"message_id":"good_after_bad","type":"question","sender_handle":"term_worker","subject":"good question behind the bad one","payload":{"task_id":"task_good","dispatch_id":"ctx_good"}}]}}'
+      ;;
+    malformed_id_bool)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_bad_id","messages":[{"message_id":true,"type":"escalation","sender_handle":"term_worker","subject":"boolean id","payload":{"task_id":"task_bad","dispatch_id":"ctx_bad"}},{"message_id":"good_after_bad","type":"question","sender_handle":"term_worker","subject":"good question behind the bad one","payload":{"task_id":"task_good","dispatch_id":"ctx_good"}}]}}'
+      ;;
+    # 불량 1통 뒤에 정상 question 2통. 형제 편지가 둘 다 살아남아야 한다.
+    malformed_id_two_good)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_bad_id_two_good","messages":[{"message_id":{"bad":1},"type":"escalation","sender_handle":"term_worker","subject":"object id","payload":{"task_id":"task_bad","dispatch_id":"ctx_bad"}},{"message_id":"good_after_bad_1","type":"question","sender_handle":"term_worker","subject":"first good question","payload":{"task_id":"task_good","dispatch_id":"ctx_good"}},{"message_id":"good_after_bad_2","type":"question","sender_handle":"term_worker","subject":"second good question","payload":{"task_id":"task_good","dispatch_id":"ctx_good"}}]}}'
+      ;;
+    # F-B11-2: 불량 1통 뒤에 서로 다른 정상 lifecycle 4종. 4종이 각각 깨어나야 한다.
+    malformed_id_four_good)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_bad_id_four_good","messages":[{"message_id":{"bad":1},"type":"escalation","sender_handle":"term_worker","subject":"object id","payload":{"task_id":"task_bad","dispatch_id":"ctx_bad"}},{"message_id":"four_question","type":"question","sender_handle":"term_worker","subject":"good question","payload":{"task_id":"task_good","dispatch_id":"ctx_good"}},{"message_id":"four_ask","type":"ask","sender_handle":"term_worker","subject":"good ask","payload":{"task_id":"task_good","dispatch_id":"ctx_good"}},{"message_id":"four_escalation","type":"escalation","sender_handle":"term_worker","subject":"good escalation","payload":{"task_id":"task_good","dispatch_id":"ctx_good"}},{"message_id":"four_gate","type":"decision_gate","sender_handle":"term_worker","subject":"good gate","payload":{"task_id":"task_good","dispatch_id":"ctx_good"}}]}}'
+      ;;
+    # F-B11-2 누출 검사용: 불량 편지의 제목·본문·payload·task·dispatch 에 서로 다른 표식을
+    # 심는다. 이 표식이 stdout·relay 로그·감독 terminal send·project 상신 어디에도 나오면 안 된다.
+    malformed_id_secret)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_bad_id_secret","messages":[{"message_id":{"bad":1},"type":"escalation","sender_handle":"term_worker","subject":"SECRET_SUBJECT_ZYX","body":"SECRET_BODY_ZYX","payload":{"task_id":"SECRET_TASK_ZYX","dispatch_id":"SECRET_DISPATCH_ZYX","note":"SECRET_PAYLOAD_ZYX"}},{"message_id":"good_after_secret","type":"question","sender_handle":"term_worker","subject":"good question behind the bad one","payload":{"task_id":"task_good","dispatch_id":"ctx_good"}}]}}'
+      ;;
+    # F-B11-2 소비 끝단: companion 이 올린 모양 결함 알림이 우편함으로 돌아온 모습.
+    # 정확히 1회 깨우고, 알림이 또 다른 알림을 만들지 않아야 한다(재귀 금지).
+    shape_report_echo)
+      printf '{"result":{"deliveryId":"delivery_shape_echo","messages":[%s]}}\n' "$(shape_alert_letter shape_alert_1)"
+      ;;
+    shape_report_echo_replay)
+      printf '{"result":{"deliveryId":"delivery_shape_echo_replay","messages":[%s,%s]}}\n' \
+        "$(shape_alert_letter shape_alert_same)" "$(SA_ALIAS=1 shape_alert_letter shape_alert_same)"
+      ;;
+    # F-B11-3 위조 알림 12종. 정상 알림에서 딱 한 칸만 어긋난다. 전부 wake 0 + ack 이어야 하고,
+    # 같은 Delivery 의 정상 형제는 그대로 깨어나야 한다.
+    shape_alert_outsider)
+      SA_SENDER=term_outsider SA_PANE=pane_outsider shape_forged_delivery
+      ;;
+    shape_alert_same_handle_other_pane)
+      SA_PANE=pane_other_window shape_forged_delivery
+      ;;
+    shape_alert_no_pane)
+      SA_PANE= shape_forged_delivery
+      ;;
+    shape_alert_old_handle)
+      SA_SENDER=term_supervisor_prev shape_forged_delivery
+      ;;
+    shape_alert_roster_unknown)
+      shape_forged_delivery
+      printf '1\n' > "$STATE_DIR/roster-fail-now"
+      ;;
+    shape_alert_bad_subject)
+      SA_SUBJECT=message_shape_quarantined:other_board shape_forged_delivery
+      ;;
+    shape_alert_bad_board)
+      SA_BOARD=other_board SA_SUBJECT=message_shape_quarantined:board_test shape_forged_delivery
+      ;;
+    shape_alert_bad_reason)
+      SA_REASON=not_in_the_allow_list shape_forged_delivery
+      ;;
+    shape_alert_bad_ref)
+      SA_REF=ZZZZZZZZZZZZ shape_forged_delivery
+      ;;
+    shape_alert_bad_index)
+      SA_INDEX=-1 shape_forged_delivery
+      ;;
+    shape_alert_bad_type)
+      SA_MTYPE=weird_forged_type shape_forged_delivery
+      ;;
+    shape_alert_not_escalation)
+      SA_TYPE=question shape_forged_delivery
+      ;;
+    shape_alert_extra_key)
+      SA_EXTRA=',"taskId":"task_smuggled"' shape_forged_delivery
+      ;;
+    shape_alert_body_raw)
+      SA_BODY='board=board_test deliveryRef=a1b2c3d4e5f6 index=0 type=escalation reason=message_id_type taskId=task_smuggled' shape_forged_delivery
+      ;;
+    lifecycle_worker_done_two)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_worker_done_two","messages":[{"message_id":"worker_done_1","type":"worker_done","sender_handle":"term_worker","subject":"first completion report","payload":{"task_id":"task_bf886c87af30","dispatch_id":"ctx_de177164da67"}},{"message_id":"worker_done_2","type":"worker_done","sender_handle":"term_worker","subject":"second completion retry","payload":{"task_id":"task_bf886c87af30","dispatch_id":"ctx_de177164da67"}}]}}'
+      ;;
+    # B6 선두 차단 시험: 식별자 없는 편지가 큐 맨 앞에 있고 그 뒤에 정상 편지 2통이 있다.
+    head_of_line)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_hol","messages":[{"message_id":"hol_bad","type":"escalation","sender_handle":"term_worker","subject":"missing ids at queue head","payload":{}},{"message_id":"hol_good_1","type":"escalation","sender_handle":"term_worker","subject":"behind the bad one","payload":{"task_id":"task_hol_1","dispatch_id":"ctx_hol_1"}},{"message_id":"hol_good_2","type":"decision_gate","sender_handle":"term_worker","subject":"also behind","payload":{"task_id":"task_hol_2","dispatch_id":"ctx_hol_2"}}]}}'
+      ;;
+    # B6 슈퍼 지시 시험: 슈퍼가 실제로 쓰는 type=escalation 이고 카드 식별자가 없다.
+    super_escalation)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_super_esc","messages":[{"message_id":"super_esc_1","type":"escalation","sender_handle":"term_super_coord","sender_pane_key":"pane_super_coord","subject":"super directive as escalation","payload":{}},{"message_id":"super_esc_behind","type":"escalation","sender_handle":"term_worker","subject":"behind the directive","payload":{"task_id":"task_esc_behind","dispatch_id":"ctx_esc_behind"}}]}}'
+      ;;
+    super_escalation_wrong_handle)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_super_esc","messages":[{"message_id":"super_esc_1","type":"escalation","sender_handle":"term_impostor","sender_pane_key":"pane_super_coord","subject":"impostor handle","payload":{}}]}}'
+      ;;
+    super_escalation_wrong_pane)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_super_esc","messages":[{"message_id":"super_esc_1","type":"escalation","sender_handle":"term_super_coord","sender_pane_key":"pane_other_window","subject":"impostor pane","payload":{}}]}}'
+      ;;
+    super_escalation_no_pane)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_super_esc","messages":[{"message_id":"super_esc_1","type":"escalation","sender_handle":"term_super_coord","subject":"no pane key","payload":{}}]}}'
+      ;;
+    super_escalation_ask)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_super_esc","messages":[{"message_id":"super_esc_1","type":"ask","sender_handle":"term_super_coord","sender_pane_key":"pane_super_coord","subject":"directive as ask","payload":{}}]}}'
+      ;;
+    super_escalation_forged_payload)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_super_esc","messages":[{"message_id":"super_esc_1","type":"escalation","sender_handle":"term_worker","sender_pane_key":"pane_worker","subject":"self-declared super directive","payload":{"superDirective":true,"superReply":true,"targetRunId":"run_super"}}]}}'
+      ;;
+    super_escalation_duplicate)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_super_esc","messages":[{"message_id":"super_esc_same","type":"escalation","sender_handle":"term_super_coord","sender_pane_key":"pane_super_coord","subject":"directive","payload":{}},{"messageId":"super_esc_same","type":"escalation","sender":"term_super_coord","sender_pane_key":"pane_super_coord","subject":"same directive replayed","payload":{}}]}}'
+      ;;
     worker_done)
-      printf '%s\n' '{"result":{"deliveryId":"delivery_1","messages":[{"message_id":"wd_1","type":"worker_done","sender_handle":"term_worker","subject":"card done","payload":{"task_id":"task_w","dispatch_id":"ctx_w","outcome":"succeeded"}},{"message_id":"wd_1_dup","type":"worker_done","sender_handle":"term_worker","subject":"duplicate","payload":{"task_id":"task_w","dispatch_id":"ctx_w","outcome":"succeeded"}}]}}'
+    # I-COMPANION-MAIN: 두 번째 worker_done 은 같은 messageId(wd_1)의 진짜 중복이다.
+      # B11(messageId 중복 억제) 체계에서 같은 messageId = 같은 편지 → 1회만 깨운다.
+      # (이전 wd_1_dup 처럼 다른 messageId 면 B11 에서 별개 편지로 2회 깨운다 —
+      #  lifecycle_worker_done_two 가 그쪽을 검사한다.) H2 ack-재생 시험은 중복 미재생을
+      # 본다.
+      printf '%s\n' '{"result":{"deliveryId":"delivery_1","messages":[{"message_id":"wd_1","type":"worker_done","sender_handle":"term_worker","subject":"card done","payload":{"task_id":"task_bf886c87af30","dispatch_id":"ctx_de177164da67","outcome":"succeeded"}},{"message_id":"wd_1","type":"worker_done","sender_handle":"term_worker","subject":"duplicate","payload":{"task_id":"task_bf886c87af30","dispatch_id":"ctx_de177164da67","outcome":"succeeded"}}]}}'
       ;;
     raw)
       printf '%s\n' '{"result":{"deliveryId":"delivery_1","messages":[{"message_id":"raw_status","type":"status","sender_handle":"term_worker","subject":"legacy_read_only effectsApplied=false","payload":{"task_id":"task_raw","dispatch_id":"ctx_raw"}}]}}'
@@ -161,11 +622,63 @@ if [ "${1:-}" = "orchestration" ] && [ "${2:-}" = "check" ]; then
     super_reply_duplicate)
       printf '%s\n' '{"result":{"deliveryId":"delivery_super_reply","messages":[{"message_id":"super_reply_same","type":"status","sender_handle":"term_super","subject":"supervisor reply","payload":{"superReply":true,"targetRunId":"run_super"}},{"messageId":"super_reply_same","type":"status","sender":"term_super","subject":"same message replay","payload":{"superReply":true,"targetRunId":"run_super"}}]}}'
       ;;
-    ordinary_status)
-      printf '%s\n' '{"result":{"deliveryId":"delivery_ordinary_status","messages":[{"message_id":"ordinary_status_1","type":"status","sender_handle":"term_worker","subject":"ordinary status","payload":{"superReply":false,"targetRunId":"run_super"}}]}}'
+   ordinary_status)
+     printf '%s\n' '{"result":{"deliveryId":"delivery_ordinary_status","messages":[{"message_id":"ordinary_status_1","type":"status","sender_handle":"term_worker","subject":"ordinary status","payload":{"superReply":false,"targetRunId":"run_super"}}]}}'
+     ;;
+    super_directive)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_super_dir","messages":[{"message_id":"super_dir_1","type":"status","sender_handle":"term_super_coord","sender_pane_key":"pane_super_coord","subject":"super directive","payload":{}}]}}'
+      ;;
+    super_directive_no_pane)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_super_dir_no_pane","messages":[{"message_id":"super_dir_no_pane","type":"status","sender_handle":"term_super_coord","subject":"directive without stable pane","payload":{}}]}}'
+      ;;
+    super_directive_wrong_pane)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_super_dir_wrong_pane","messages":[{"message_id":"super_dir_wrong_pane","type":"status","sender_handle":"term_super_coord","sender_pane_key":"pane_other_window","subject":"directive from another pane","payload":{}}]}}'
+      ;;
+    state_super_mix)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_state_super_mix","messages":[{"message_id":"mix_nudge","type":"status","sender_handle":"term_supervisor","subject":"board state","payload":{"readyCardPresent":true,"activeDispatchAbsent":true,"coordinatorIdle":true,"stateFingerprint":"mix_nudge_fp"}},{"message_id":"mix_super_dir","type":"status","sender_handle":"term_super_coord","sender_pane_key":"pane_super_coord","subject":"super directive in mix","payload":{}},{"message_id":"mix_start","type":"status","sender_handle":"term_supervisor","subject":"start declaration","payload":{"startDeclaration":true,"stateFingerprint":"mix_start_fp"}}]}}'
+      ;;
+    super_directive_duplicate)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_super_dir","messages":[{"message_id":"super_dir_same","type":"status","sender_handle":"term_super_coord","sender_pane_key":"pane_super_coord","subject":"directive","payload":{}},{"messageId":"super_dir_same","type":"status","sender":"term_super_coord","sender_pane_key":"pane_super_coord","subject":"replay","payload":{}}]}}'
+      ;;
+    same_board_status_ids)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_same_board_ids","messages":[{"message_id":"worker_id_1","type":"status","sender_handle":"term_same_board_worker","sender_pane_key":"pane_worker","subject":"worker progress","payload":{"taskId":"task_worker","dispatchId":"ctx_worker"}},{"message_id":"reviewer_id_1","type":"status","sender_handle":"term_same_board_reviewer","sender_pane_key":"pane_reviewer","subject":"reviewer note","payload":{"taskId":"task_reviewer","dispatchId":"ctx_reviewer"}}]}}'
+      ;;
+    pre_handover_status)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_pre_handover","messages":[{"message_id":"old_coord_1","type":"status","sender_handle":"term_old_coord","sender_pane_key":"pane_old_coord","subject":"pre handover directive","payload":{}}]}}'
+      ;;
+    super_handover)
+      if [ "$current_phase" -eq 0 ]; then
+        printf '%s\n' '{"result":{"deliveryId":"delivery_super_handover_1","messages":[{"message_id":"sd_handover_1","type":"status","sender_handle":"term_super_coord","sender_pane_key":"pane_super_coord","subject":"directive from first coord","payload":{}}]}}'
+      else
+        printf '%s\n' '{"result":{"deliveryId":"delivery_super_handover_2","messages":[{"message_id":"sd_old_replay","type":"status","sender_handle":"term_super_coord","sender_pane_key":"pane_super_coord","subject":"old coord replay after handover","payload":{}},{"message_id":"sd_new_1","type":"status","sender_handle":"term_new_coord","sender_pane_key":"pane_new_coord","subject":"new coord directive","payload":{}}]}}'
+      fi
       ;;
     candidate_absent|candidate_waiting|candidate_internal|candidate_present|candidate_ask|candidate_escalation|candidate_missing_id|candidate_ambiguous|candidate_duplicate)
       candidate_delivery
+      ;;
+    state_nudge)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_state","messages":[{"message_id":"state_ready","type":"status","sender_handle":"term_supervisor","subject":"board state","payload":{"readyCardPresent":true,"activeDispatchAbsent":true,"coordinatorIdle":true,"stateFingerprint":"nudge_fp"}}]}}'
+      ;;
+    state_nudge_duplicate)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_state","messages":[{"message_id":"state_1","type":"status","sender_handle":"term_supervisor","subject":"board state","payload":{"readyCardPresent":true,"activeDispatchAbsent":true,"coordinatorIdle":true,"stateFingerprint":"nudge_fp"}},{"message_id":"state_2","type":"status","sender_handle":"term_supervisor","subject":"same board state","payload":{"readyCardPresent":true,"activeDispatchAbsent":true,"coordinatorIdle":true,"stateFingerprint":"nudge_fp"}}]}}'
+      ;;
+    state_nudge_fingerprint_change)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_state","messages":[{"message_id":"state_a","type":"status","sender_handle":"term_supervisor","subject":"board state A","payload":{"readyCardPresent":true,"activeDispatchAbsent":true,"coordinatorIdle":true,"stateFingerprint":"nudge_a"}},{"message_id":"state_b","type":"status","sender_handle":"term_supervisor","subject":"board state B","payload":{"readyCardPresent":true,"activeDispatchAbsent":true,"coordinatorIdle":true,"stateFingerprint":"nudge_b"}}]}}'
+      ;;
+    state_nudge_false)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_state","messages":[{"message_id":"state_false","type":"status","sender_handle":"term_supervisor","subject":"dispatch active","payload":{"readyCardPresent":true,"activeDispatchAbsent":false,"coordinatorIdle":true,"stateFingerprint":"nudge_false"}}]}}'
+      ;;
+    state_nudge_closed)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_state","messages":[{"message_id":"state_closed","type":"status","sender_handle":"term_supervisor","subject":"board closed","payload":{"readyCardPresent":true,"activeDispatchAbsent":true,"coordinatorIdle":true,"boardClosed":true,"stateFingerprint":"nudge_closed"}}]}}'
+      ;;
+    state_gate_waiting)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_state","messages":[{"message_id":"state_gate","type":"status","sender_handle":"term_supervisor","subject":"gate waiting","payload":{"readyCardPresent":true,"activeDispatchAbsent":true,"coordinatorIdle":true,"gateWaiting":true,"stateFingerprint":"nudge_gate"}}]}}'
+      ;;
+    start_duplicate_missing_relay|start_duplicate_present)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_state","messages":[{"message_id":"start_1","type":"status","sender_handle":"term_supervisor","subject":"start declaration","payload":{"startDeclaration":true,"stateFingerprint":"start_fp"}},{"message_id":"start_2","type":"status","sender_handle":"term_supervisor","subject":"same start declaration","payload":{"startDeclaration":true,"stateFingerprint":"start_fp"}}]}}'
+      ;;
+    start_missing_relay|start_relay_present|start_wrong_relay)
+      printf '%s\n' '{"result":{"deliveryId":"delivery_state","messages":[{"message_id":"start_1","type":"status","sender_handle":"term_supervisor","subject":"start declaration","payload":{"startDeclaration":true,"stateFingerprint":"start_fp"}}]}}'
       ;;
     *)
       printf '%s\n' '{"result":{"deliveryId":null,"messages":[],"count":0}}'
@@ -174,8 +687,175 @@ if [ "${1:-}" = "orchestration" ] && [ "${2:-}" = "check" ]; then
   exit 0
 fi
 
+if [ "${1:-}" = "orchestration" ] && [ "${2:-}" = "gate-list" ]; then
+  log_call "$*"
+  case "${FAKE_GATE_MODE:-empty}" in
+    pending_one)
+      printf '%s\n' '{"ok":true,"result":{"runId":"run_project","count":1,"gates":[{"id":"gate_p1","task_id":"task_gate","question":"approve?","status":"pending"}]}}'
+      ;;
+    pending_two)
+      printf '%s\n' '{"ok":true,"result":{"runId":"run_project","count":2,"gates":[{"id":"gate_p1","task_id":"task_g1","question":"q1","status":"pending"},{"id":"gate_p2","task_id":"task_g2","question":"q2","status":"pending"}]}}'
+      ;;
+    pending_noid)
+      printf '%s\n' '{"ok":true,"result":{"runId":"run_project","count":1,"gates":[{"id":"","task_id":"task_x","question":"q","status":"pending"}]}}'
+      ;;
+    duplicate)
+      printf '%s\n' '{"ok":true,"result":{"runId":"run_project","count":2,"gates":[{"id":"gate_p1","task_id":"task_g1","question":"q1","status":"pending"},{"id":"gate_p1","task_id":"task_g1b","question":"q1b","status":"pending"}]}}'
+      ;;
+    mixed_malformed)
+      printf '%s\n' '{"ok":true,"result":{"runId":"run_project","count":2,"gates":[{"id":"gate_p1","task_id":"task_g1","question":"q1","status":"pending"},"oops"]}}'
+      ;;
+    count_missing)
+      printf '%s\n' '{"ok":true,"result":{"runId":"run_project","gates":[{"id":"gate_p1","task_id":"task_gate","question":"approve?","status":"pending"}]}}'
+      ;;
+    count_mismatch)
+      printf '%s\n' '{"ok":true,"result":{"runId":"run_project","count":2,"gates":[{"id":"gate_p1","task_id":"task_gate","question":"approve?","status":"pending"}]}}'
+      ;;
+    count_negative)
+      printf '%s\n' '{"ok":true,"result":{"runId":"run_project","count":-1,"gates":[{"id":"gate_p1","task_id":"task_gate","question":"approve?","status":"pending"}]}}'
+      ;;
+    count_bool)
+      printf '%s\n' '{"ok":true,"result":{"runId":"run_project","count":true,"gates":[{"id":"gate_p1","task_id":"task_gate","question":"approve?","status":"pending"}]}}'
+      ;;
+    task_missing)
+      printf '%s\n' '{"ok":true,"result":{"runId":"run_project","count":1,"gates":[{"id":"gate_p1","question":"approve?","status":"pending"}]}}'
+      ;;
+    status_wrong)
+      printf '%s\n' '{"ok":true,"result":{"runId":"run_project","count":1,"gates":[{"id":"gate_p1","task_id":"task_gate","question":"approve?","status":"open"}]}}'
+      ;;
+    ok_false)
+      printf '%s\n' '{"ok":false,"result":{"runId":"run_project","count":1,"gates":[{"id":"gate_p1","task_id":"task_gate","question":"approve?","status":"pending"}]}}'
+      ;;
+    wrong_run)
+      printf '%s\n' '{"ok":true,"result":{"runId":"run_other","count":1,"gates":[{"id":"gate_p1","task_id":"task_gate","question":"approve?","status":"pending"}]}}'
+      ;;
+    fail)
+      printf '%s\n' 'gate_list_failed' >&2
+      exit 1
+      ;;
+    malformed)
+      printf '%s\n' '{"ok":true,"result":{"runId":"run_project","gates":"not-a-list"}}'
+      ;;
+    empty|*)
+      printf '%s\n' '{"ok":true,"result":{"runId":"run_project","count":0,"gates":[]}}'
+      ;;
+  esac
+  exit 0
+fi
+
 if [ "${1:-}" = "orchestration" ] && [ "${2:-}" = "inbox" ]; then
   log_call "$*"
+  if [ -n "${FAKE_GATE_LETTERS+x}" ]; then
+    case "${FAKE_GATE_LETTERS:-none}" in
+      none|"")
+        printf '%s\n' '{"ok":true,"result":{"count":0,"messages":[]}}'
+        ;;
+      inbox_fail)
+        printf '%s\n' 'inbox_failed' >&2
+        exit 1
+        ;;
+      # B6 포화 실명 시험. 전역 조회(--terminal 없음)는 다른 판 편지까지 섞여 전용 한도에
+      # 닿아 포화가 되고, 슈퍼 Run 주소로 좁힌 조회는 같은 순간에도 대응 편지 1통만 담긴다.
+      scoped_window)
+        if printf '%s' "$*" | grep -q -- '--terminal run:run_super'; then
+          printf '%s\n' '{"ok":true,"result":{"count":1,"messages":[{"id":"gl_1","run_id":"run_super","type":"decision_gate","from_handle":"term_supervisor","sender_pane_key":"pane_supervisor","to_handle":"run:run_super","subject":"gate letter","payload":{"gateId":"gate_p1","project":"project_test","board":"board_test","sourceTaskId":"task_gate"}}]}}'
+        else
+          printf '%s\n' '{"ok":true,"result":{"count":2,"messages":[{"id":"gl_1","run_id":"run_super","type":"decision_gate","from_handle":"term_supervisor","sender_pane_key":"pane_supervisor","to_handle":"run:run_super","subject":"gate letter","payload":{"gateId":"gate_p1","project":"project_test","board":"board_test","sourceTaskId":"task_gate"}},{"id":"gl_closed_board","run_id":"run_closed_board","type":"status","from_handle":"term_other","to_handle":"run:run_closed_board","subject":"closed board noise","payload":{}}]}}'
+        fi
+        ;;
+      matched_one)
+        printf '%s\n' '{"ok":true,"result":{"count":1,"messages":[{"id":"gl_1","run_id":"run_super","type":"decision_gate","from_handle":"term_supervisor","sender_pane_key":"pane_supervisor","to_handle":"run:run_super","subject":"gate letter","payload":{"gateId":"gate_p1","project":"project_test","board":"board_test","sourceTaskId":"task_gate"}}]}}'
+        ;;
+      matched_two)
+        printf '%s\n' '{"ok":true,"result":{"count":2,"messages":[{"id":"gl_1","run_id":"run_super","type":"decision_gate","from_handle":"term_supervisor","sender_pane_key":"pane_supervisor","to_handle":"run:run_super","subject":"gate letter a","payload":{"gateId":"gate_p1","project":"project_test","board":"board_test","sourceTaskId":"task_gate"}},{"id":"gl_2","run_id":"run_super","type":"decision_gate","from_handle":"term_supervisor","sender_pane_key":"pane_supervisor","to_handle":"run:run_super","subject":"gate letter b","payload":{"gateId":"gate_p1","project":"project_test","board":"board_test","sourceTaskId":"task_gate"}}]}}'
+        ;;
+      matched_one_plus_invalid)
+        printf '%s\n' '{"ok":true,"result":{"count":2,"messages":[{"id":"gl_1","run_id":"run_super","type":"decision_gate","from_handle":"term_supervisor","sender_pane_key":"pane_supervisor","to_handle":"run:run_super","subject":"gate letter","payload":{"gateId":"gate_p1","project":"project_test","board":"board_test","sourceTaskId":"task_gate"}},{"id":"gl_bad","run_id":"run_super","type":"decision_gate","from_handle":"term_outsider","to_handle":"term_nowhere","subject":"forged copy","payload":{"gateId":"gate_p1"}}]}}'
+        ;;
+      wrong_sender)
+        printf '%s\n' '{"ok":true,"result":{"count":1,"messages":[{"id":"gl_1","run_id":"run_super","type":"decision_gate","from_handle":"term_outsider","sender_pane_key":"pane_outsider","to_handle":"run:run_super","subject":"gate letter","payload":{"gateId":"gate_p1","project":"project_test","board":"board_test","sourceTaskId":"task_gate"}}]}}'
+        ;;
+      missing_sender_pane)
+        printf '%s\n' '{"ok":true,"result":{"count":1,"messages":[{"id":"gl_1","run_id":"run_super","type":"decision_gate","from_handle":"term_supervisor","to_handle":"run:run_super","subject":"gate letter","payload":{"gateId":"gate_p1","project":"project_test","board":"board_test","sourceTaskId":"task_gate"}}]}}'
+        ;;
+      wrong_recipient)
+        printf '%s\n' '{"ok":true,"result":{"count":1,"messages":[{"id":"gl_1","run_id":"run_super","type":"decision_gate","from_handle":"term_supervisor","sender_pane_key":"pane_supervisor","to_handle":"term_someone","subject":"gate letter","payload":{"gateId":"gate_p1","project":"project_test","board":"board_test","sourceTaskId":"task_gate"}}]}}'
+        ;;
+      wrong_project)
+        printf '%s\n' '{"ok":true,"result":{"count":1,"messages":[{"id":"gl_1","run_id":"run_super","type":"decision_gate","from_handle":"term_supervisor","sender_pane_key":"pane_supervisor","to_handle":"run:run_super","subject":"gate letter","payload":{"gateId":"gate_p1","project":"other_project","board":"board_test","sourceTaskId":"task_gate"}}]}}'
+        ;;
+      wrong_board)
+        printf '%s\n' '{"ok":true,"result":{"count":1,"messages":[{"id":"gl_1","run_id":"run_super","type":"decision_gate","from_handle":"term_supervisor","sender_pane_key":"pane_supervisor","to_handle":"run:run_super","subject":"gate letter","payload":{"gateId":"gate_p1","project":"project_test","board":"other_board","sourceTaskId":"task_gate"}}]}}'
+        ;;
+      wrong_source_task)
+        printf '%s\n' '{"ok":true,"result":{"count":1,"messages":[{"id":"gl_1","run_id":"run_super","type":"decision_gate","from_handle":"term_supervisor","sender_pane_key":"pane_supervisor","to_handle":"run:run_super","subject":"gate letter","payload":{"gateId":"gate_p1","project":"project_test","board":"board_test","sourceTaskId":"task_other"}}]}}'
+        ;;
+      retired_pane)
+        printf '%s\n' '{"ok":true,"result":{"count":1,"messages":[{"id":"gl_1","run_id":"run_super","type":"decision_gate","from_handle":"term_old_supervisor","sender_pane_key":"pane_old_supervisor","to_handle":"run:run_super","subject":"gate letter from previous session","payload":{"gateId":"gate_p1","project":"project_test","board":"board_test","sourceTaskId":"task_gate"}}]}}'
+        ;;
+      same_pane_wrong_handle)
+        printf '%s\n' '{"ok":true,"result":{"count":1,"messages":[{"id":"gl_1","run_id":"run_super","type":"decision_gate","from_handle":"term_wrong","sender_pane_key":"pane_supervisor","to_handle":"run:run_super","subject":"gate letter","payload":{"gateId":"gate_p1","project":"project_test","board":"board_test","sourceTaskId":"task_gate"}}]}}'
+        ;;
+      same_handle_wrong_pane)
+        printf '%s\n' '{"ok":true,"result":{"count":1,"messages":[{"id":"gl_1","run_id":"run_super","type":"decision_gate","from_handle":"term_supervisor","sender_pane_key":"pane_other","to_handle":"run:run_super","subject":"gate letter","payload":{"gateId":"gate_p1","project":"project_test","board":"board_test","sourceTaskId":"task_gate"}}]}}'
+        ;;
+      missing_project)
+        printf '%s\n' '{"ok":true,"result":{"count":1,"messages":[{"id":"gl_1","run_id":"run_super","type":"decision_gate","from_handle":"term_supervisor","sender_pane_key":"pane_supervisor","to_handle":"run:run_super","subject":"gate letter","payload":{"gateId":"gate_p1","board":"board_test","sourceTaskId":"task_gate"}}]}}'
+        ;;
+      missing_board)
+        printf '%s\n' '{"ok":true,"result":{"count":1,"messages":[{"id":"gl_1","run_id":"run_super","type":"decision_gate","from_handle":"term_supervisor","sender_pane_key":"pane_supervisor","to_handle":"run:run_super","subject":"gate letter","payload":{"gateId":"gate_p1","project":"project_test","sourceTaskId":"task_gate"}}]}}'
+        ;;
+      missing_source_task)
+        printf '%s\n' '{"ok":true,"result":{"count":1,"messages":[{"id":"gl_1","run_id":"run_super","type":"decision_gate","from_handle":"term_supervisor","sender_pane_key":"pane_supervisor","to_handle":"run:run_super","subject":"gate letter","payload":{"gateId":"gate_p1","project":"project_test","board":"board_test"}}]}}'
+        ;;
+      retired_wrong_handle)
+        printf '%s\n' '{"ok":true,"result":{"count":1,"messages":[{"id":"gl_1","run_id":"run_super","type":"decision_gate","from_handle":"term_wrong","sender_pane_key":"pane_old_supervisor","to_handle":"run:run_super","subject":"gate letter from previous session wrong handle","payload":{"gateId":"gate_p1","project":"project_test","board":"board_test","sourceTaskId":"task_gate"}}]}}'
+        ;;
+      inbox_ok_false)
+        printf '%s\n' '{"ok":false,"result":{"count":1,"messages":[{"id":"gl_1","run_id":"run_super","type":"decision_gate","from_handle":"term_supervisor","sender_pane_key":"pane_supervisor","to_handle":"run:run_super","subject":"gate letter","payload":{"gateId":"gate_p1"}}]}}'
+        ;;
+      inbox_mixed_malformed)
+        printf '%s\n' '{"ok":true,"result":{"count":2,"messages":[{"id":"gl_1","run_id":"run_super","type":"decision_gate","from_handle":"term_supervisor","sender_pane_key":"pane_supervisor","to_handle":"run:run_super","subject":"gate letter","payload":{"gateId":"gate_p1","project":"project_test","board":"board_test","sourceTaskId":"task_gate"}},"oops"]}}'
+        ;;
+      inbox_count_missing)
+        printf '%s\n' '{"ok":true,"result":{"messages":[{"id":"gl_1","run_id":"run_super","type":"decision_gate","from_handle":"term_supervisor","sender_pane_key":"pane_supervisor","to_handle":"run:run_super","subject":"gate letter","payload":{"gateId":"gate_p1","project":"project_test","board":"board_test","sourceTaskId":"task_gate"}}]}}'
+        ;;
+      inbox_count_mismatch)
+        printf '%s\n' '{"ok":true,"result":{"count":2,"messages":[{"id":"gl_1","run_id":"run_super","type":"decision_gate","from_handle":"term_supervisor","sender_pane_key":"pane_supervisor","to_handle":"run:run_super","subject":"gate letter","payload":{"gateId":"gate_p1","project":"project_test","board":"board_test","sourceTaskId":"task_gate"}}]}}'
+        ;;
+      inbox_count_negative)
+        printf '%s\n' '{"ok":true,"result":{"count":-1,"messages":[{"id":"gl_1","run_id":"run_super","type":"decision_gate","from_handle":"term_supervisor","sender_pane_key":"pane_supervisor","to_handle":"run:run_super","subject":"gate letter","payload":{"gateId":"gate_p1","project":"project_test","board":"board_test","sourceTaskId":"task_gate"}}]}}'
+        ;;
+      inbox_count_bool)
+        printf '%s\n' '{"ok":true,"result":{"count":true,"messages":[{"id":"gl_1","run_id":"run_super","type":"decision_gate","from_handle":"term_supervisor","sender_pane_key":"pane_supervisor","to_handle":"run:run_super","subject":"gate letter","payload":{"gateId":"gate_p1","project":"project_test","board":"board_test","sourceTaskId":"task_gate"}}]}}'
+        ;;
+      inbox_row_missing_id)
+        printf '%s\n' '{"ok":true,"result":{"count":1,"messages":[{"run_id":"run_super","type":"decision_gate","from_handle":"term_supervisor","sender_pane_key":"pane_supervisor","to_handle":"run:run_super","subject":"gate letter","payload":{"gateId":"gate_p1","project":"project_test","board":"board_test","sourceTaskId":"task_gate"}}]}}'
+        ;;
+      inbox_row_missing_run)
+        printf '%s\n' '{"ok":true,"result":{"count":1,"messages":[{"id":"gl_1","type":"decision_gate","from_handle":"term_supervisor","sender_pane_key":"pane_supervisor","to_handle":"run:run_super","subject":"gate letter","payload":{"gateId":"gate_p1","project":"project_test","board":"board_test","sourceTaskId":"task_gate"}}]}}'
+        ;;
+      inbox_row_missing_type)
+        printf '%s\n' '{"ok":true,"result":{"count":1,"messages":[{"id":"gl_1","run_id":"run_super","from_handle":"term_supervisor","sender_pane_key":"pane_supervisor","to_handle":"run:run_super","subject":"gate letter","payload":{"gateId":"gate_p1","project":"project_test","board":"board_test","sourceTaskId":"task_gate"}}]}}'
+        ;;
+      other_gate)
+        printf '%s\n' '{"ok":true,"result":{"count":1,"messages":[{"id":"gl_1","run_id":"run_super","type":"decision_gate","from_handle":"term_supervisor","sender_pane_key":"pane_supervisor","to_handle":"run:run_super","subject":"other gate","payload":{"gateId":"gate_other","project":"project_test","board":"board_test","sourceTaskId":"task_gate"}}]}}'
+        ;;
+      other_run)
+        printf '%s\n' '{"ok":true,"result":{"count":1,"messages":[{"id":"gl_1","run_id":"run_other","type":"decision_gate","from_handle":"term_supervisor","sender_pane_key":"pane_supervisor","to_handle":"run:run_super","subject":"other run","payload":{"gateId":"gate_p1","project":"project_test","board":"board_test","sourceTaskId":"task_gate"}}]}}'
+        ;;
+      no_gateid)
+        printf '%s\n' '{"ok":true,"result":{"count":1,"messages":[{"id":"gl_1","run_id":"run_super","type":"decision_gate","from_handle":"term_supervisor","sender_pane_key":"pane_supervisor","to_handle":"run:run_super","subject":"no gate id","payload":{"taskId":"task_g"}}]}}'
+        ;;
+      two_gates_matched)
+        printf '%s\n' '{"ok":true,"result":{"count":2,"messages":[{"id":"gl_1","run_id":"run_super","type":"decision_gate","from_handle":"term_supervisor","sender_pane_key":"pane_supervisor","to_handle":"run:run_super","subject":"gate letter 1","payload":{"gateId":"gate_p1","project":"project_test","board":"board_test","sourceTaskId":"task_g1"}},{"id":"gl_2","run_id":"run_super","type":"decision_gate","from_handle":"term_supervisor","sender_pane_key":"pane_supervisor","to_handle":"run:run_super","subject":"gate letter 2","payload":{"gateId":"gate_p2","project":"project_test","board":"board_test","sourceTaskId":"task_g2"}}]}}'
+        ;;
+      *)
+        printf '%s\n' '{"ok":true,"result":{"count":0,"messages":[]}}'
+        ;;
+    esac
+    exit 0
+  fi
   case "$MODE" in
     candidate_internal)
       printf '%s\n' '{"result":{"messages":[{"id":"official_1","run_id":"run_project","type":"decision_gate","payload":{"taskId":"task_candidate","dispatchId":"ctx_candidate"}}]}}'
@@ -201,6 +881,22 @@ fi
 
 if [ "${1:-}" = "orchestration" ] && [ "${2:-}" = "send" ]; then
   log_call "$*"
+  # F-B11-2: project Run 상신을 실패시키는 스위치. once=첫 시도만 실패(재시도 성공 경로),
+  # always=계속 실패(재시도 한도 소진 경로). 시도 자체는 위 log_call 로 calls.log 에 남으므로
+  # "몇 번 시도했는지"와 "몇 번 성공했는지"를 따로 셀 수 있다.
+  case "${FAKE_PROJECT_SEND_FAIL:-}" in
+    always)
+      printf '%s\n' project_send_failed >&2
+      exit 7
+      ;;
+    once)
+      if [ ! -f "$STATE_DIR/project_send_failed_once" ]; then
+        : > "$STATE_DIR/project_send_failed_once"
+        printf '%s\n' project_send_failed >&2
+        exit 7
+      fi
+      ;;
+  esac
   printf '%s\n' "$*" >> "$PROJECT_SEND_LOG"
   printf '%s\n' '{"result":{"message":{"id":"project-message-1"}}}'
   exit 0

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Admin Dashboard Playbook"
+  short_description: "관리자 대시보드 결정, 설계, 검증, UTM 운영 스킬"
+  default_prompt: "Use $admin-dashboard-playbook to decide whether this service needs an internal admin dashboard, then design the implementation surface, validation plan, and UTM/share-link strategy."

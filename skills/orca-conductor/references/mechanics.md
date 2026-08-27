@@ -3,6 +3,41 @@
 일꾼 생성, 배분·감시, 사용량, 정리 — 어떤 판이든 이 절차를 그대로 쓴다. (내장 순찰 run은 사용 금지 — SKILL.md 안전 규칙 7)
 왕복·검수·배틀 오프닝은 `tiki-taka.md`, 섹션 분해·섹션 검수는 `standard-flow.md` 참조.
 
+## 0) ★★★ 코어 뼈대 3줄 — 추측하지 말고 도구로 뽑아라 (2026-08-11 kyle 확정, 이 하네스의 키) ★★★
+
+이 하네스에서 추출한, AI 에이전트 자동화 전반에 재사용하는 뼈대다 (2026-08-12 kyle "코어 추출" 논의로 확장).
+
+1. **원장 규약** — 모든 것의 원본은 파일 하나다. append-only JSONL 또는 단일 JSON, 스키마 명시, 모름은 모름(null)으로 남긴다. 사람이 정한 사실(분류·메모·정책)만 원장에 넣고, 실측 가능한 상태(링크·프로세스·설명)는 저장하지 않는다 — 저장하는 순간 낡는다. 렌더링할 때마다 실측한다.
+2. **삼표면** — 아래 참조. 원장을 사람 화면 하나 + 에이전트 창구 하나로 렌더링만 한다.
+3. **감시 사다리** — 판정·감시는 스크립트(토큰 0) 우선, AI는 애매할 때만(딥시크 건당 $0.003), 대응 판단만 상위 세션. 비용이 큰 층으로 올라가는 것은 아래 층이 판정 불능일 때뿐이다.
+
+지금까지의 사례(instance): **1호 판 관제**(상태·정책·규칙·성적·보조 감시), **2호 스킬 원장**(registry/skills-ledger.jsonl + 스킬 탭 + /skills.txt). 새 원장(프롬프트·계정 등)을 만들 때 이 3줄부터 적용하면 화면·창구가 반나절 안에 선다.
+
+**모든 운영 개념은 세 표면을 갖는다: 원본 파일 하나 + 사람 화면 하나 + 에이전트 창구 하나.**
+
+```
+상태      대시보드 개요·판 화면  =  curl -s http://127.0.0.1:8787/status.txt
+정책      라우팅 탭             =  curl -s http://127.0.0.1:8787/api/routing
+규칙      규칙 탭               =  curl -s 'http://127.0.0.1:8787/rules.txt?doc=<이름>'
+성적      성적 탭               =  curl -s http://127.0.0.1:8787/outcomes.txt   (원본 .orca/routing-events/*.jsonl)
+스킬      스킬 탭               =  curl -s 'http://127.0.0.1:8787/skills.txt?cat=<분류>'  (원본 registry/skills-ledger.jsonl)
+보조 감시  보조 감시 탭          =  curl -s http://127.0.0.1:8787/watchers.txt   (원본 = 살아있는 프로세스·심박 파일)
+```
+
+- **판 상태·규칙·정책이 궁금하면 기억을 뒤지거나 추측하지 마라. 위 창구에서 뽑아라.** 사람과 에이전트가
+  같은 원본을 보므로 "네가 아는 것"과 "kyle이 보는 것"이 갈라질 수 없다.
+- **복제 금지** — 표면은 원본 파일을 렌더링만 한다. 규칙이 사는 자리는 언제나 파일 하나다. 갈라지면 도구가 이긴다(5.57).
+- **새 개념(도구·실행기·규칙)을 들여올 때는 반드시 이 삼표면부터 만든다.** 원본 파일을 정하고, 화면과
+  창구에 등록하기 전까지는 그 개념이 "도입된 것"이 아니다 — 문서 어딘가에만 있는 규칙은 없는 규칙이다.
+- **앞으로 모든 최적화·정리는 이 원칙을 따른다** — 장황한 문서를 다듬을 때도 "어느 원본으로 합치고
+  어느 표면으로 노출하나"를 먼저 정한다.
+- **경계선 1 (과잉 방지)**: 삼표면 대상은 **운영 중 반복 조회되는 개념만**이다. 일회성 학습·기록은 문서(kyle-hub)로 둔다 — 전부 표면화하면 대시보드가 잡동사니가 된다.
+- **경계선 2 (원본 다이어트)**: 표면은 원본을 통째로 내보내므로 **원본이 뚱뚱하면 창구도 뚱뚱하다**(에이전트 curl 토큰 비용). 이 원칙의 짝은 원본을 얇게 유지하는 것이다 — 장황한 문서 재정리는 docs/TODO.md의 리팩토링 건으로 잡는다.
+
+왜 이것이 키인가: 오늘(2026-08-11) 하루의 사고 전부가 "표면 없는 정보" 탓이었다 — 편성 정책이 기억에만
+있어 위반 3회, 규칙이 문서에만 있어 잠들기 5회, 대기 의도가 머리에만 있어 무진행 오탐 3회. 표면을 만든
+것들(상태·판정·정책·규칙)은 만든 그 시각부터 사고가 잡히기 시작했다.
+
 ## 1) 일꾼 생성 (2단계 패턴 — 모델/강도 지정의 공식 경로)
 
 ```bash
@@ -22,6 +57,10 @@ orca terminal wait --terminal <handle> --for tui-idle --timeout-ms 90000 --json
 
 ## 2) 배분과 대기
 
+**교차 Run 전송은 `--from` + `--to`만 쓴다 (2026-08-11 실측 — omo-deep-analysis-1 감독 재현)**: `send`에 수신자 `--to run:<다른 판>`과 발신 판 `--run <자기 판>`을 병용하면 조회 범위가 발신 판으로 제한돼 `run_not_found`로 거절된다(runtimeId 동일·run-show 성공 상태에서 재현). 같은 명령에서 `--run`만 제거하면 성공한다.
+
+
+
 ```bash
 orca orchestration task-create --spec "<섹션·범위·금지사항 포함 명세>" --json
 ~/.claude/skills/orca-conductor/scripts/dispatch-safe.sh <taskId> <일꾼handle> <명패handle>
@@ -36,7 +75,7 @@ orca orchestration check --wait --types worker_done,escalation,decision_gate --t
 - **세션별 우편함 주소 (2026-07-15 kyle 결정·실측 정정 — 다중 세션 지휘가 일상)**:
   - **지휘자가 Orca 내부 터미널이면(기본 권장) 자기 자신이 곧 명패다** — 셸에 ORCA_PANE_KEY 등 신분 환경변수가 있고, `dispatch`가 자동으로 자기 핸들을 지휘자 주소로 찍는다(실측: 2026-07-15). 자기 핸들은 `env | grep ORCA`(신분 확인) 후 `terminal list`에서 자기 제목으로 찾는다. 더미 명패 불필요.
   - **외부 셸(Orca 밖) 지휘자만** 더미 터미널 1개를 만들어 그 handle을 명패로 쓰고 모든 `dispatch`에 `--from <명패>`를 붙인다.
-  - **지휘자 상주 도우미(표준)**: 현재 `project-supervisor`가 소유한 pane에서 `ORCA_BIN=<명시 override 또는 PATH 자동 탐색>`과 함께 `scripts/conductor-companion.sh --project <project> --board <board> --supervisor-role <감독-role> --relay-role <중계기-role> --run <project-run> [--super-run <legacy-super-run>] 300`을 Monitor(persistent)로 fire-and-forget 실행한다. `ORCA_TERMINAL_HANDLE`이 role resolve 결과와 다르면 `consumer_owner_mismatch`를 출력하고 exit 4다. companion은 현재 Run `check`·ack와 구조화 mailbox만 읽고, relay·worker·supervisor pane 출력을 읽지 않는다. 구형 handle 위치 인수와 Run 없는 호출은 실패 닫힘한다.
+  - **지휘자 상주 도우미(표준)**: 현재 `project-supervisor`가 소유한 pane에서 **`ORCA_BIN=<번들 CLI 절대경로>`를 반드시 명시**해(2026-08-10 실측: PATH 자동 탐색은 upstream `orca`로 떨어져 roster를 몰라 `ROSTER_FAIL_CLOSED reason=resolve_failed`로 닫힌다 — 이 환경에서 자동 탐색이 안전한 적은 없다) `scripts/conductor-companion.sh --project <project> --board <board> --supervisor-role <감독-role> --relay-role <중계기-role> --run <project-run> [--super-run <legacy-super-run>] 300`을 Monitor(persistent)로 fire-and-forget 실행한다. `ORCA_TERMINAL_HANDLE`이 role resolve 결과와 다르면 `consumer_owner_mismatch`를 출력하고 exit 4다. companion은 현재 Run `check`·ack와 구조화 mailbox만 읽고, relay·worker·supervisor pane 출력을 읽지 않는다. 구형 handle 위치 인수와 Run 없는 호출은 실패 닫힘한다.
   - **relay patrol 이관**: 별도 relay agent가 supervisor output을 cursor 기준으로 bounded 범위만 읽고 quoted prompt, orchestration render, old scrollback, raw를 거른다. relay는 넓은 후보를 `relay_candidate` 편지(payload의 `taskId`, `dispatchId`, `outputCursor`, `boundedSnippet`)로 project Run에 남긴다. ID 누락·복수 장부·시간 창 모호는 전체 화면을 넘기지 말고 bounded snippet만 relay가 다시 판단한다.
   - **후보와 공식 장부 대조**: companion은 project Run 전체 편지에서 같은 `taskId+dispatchId`의 공식 `decision_gate`·`question(ask)`·`escalation`만 대조한다. 정확히 하나면 `late_recovered`와 wake 0, 없으면 `misrouted_human_decision:<taskId>` escalation 정확히 1회와 supervisor text+Enter 정확히 1회다. 같은 cursor 중복은 wake 0이며, companion이 키워드 예외 목록으로 의미를 최종 판정하지 않는다.
   - relay는 super upper report·kyle 질문·카드 상태 변경을 직접 하지 않는다. kicker는 relay에 도구 실행 줄·Context% 증가, 연속 무진행 2회 정체 보고, bounded 후보 구조화 지시를 보낸다. 교대 기준은 아래 "중계기 교대(handover) 계약"이 최종본이다 — 판단 품질 저하·판 경계·context 80% 초과 셋뿐이고, 여기 있던 "Context 50%" 기준은 2026-08-04에 폐기됐다.
@@ -44,6 +83,13 @@ orca orchestration check --wait --types worker_done,escalation,decision_gate --t
   - **왜 필수인가(실측 2026-07-15)**: 외부 셸 발령은 자기 신분이 없어 Orca가 지휘자 주소를 **기존 다른 터미널로 대체 기입(fallback)** 한다 — 실측에서 외부 세션 일꾼들의 편지가 전부 내부 세션 지휘자 앞으로 배달됐다(to_handle 원본 확인). `--from` 명패를 쓰면 이 오배달이 사라진다. 배달 자체는 주소대로 정확하다.
   - 그래도 `[판:]` 접두사 + "모르는 카드 불개입" 규칙은 유지 — 명패를 깜빡한 세션·과거 판의 잔재 신호에 대한 마지막 방어선이다.
   - **실행을 멈추는 질문은 편지로, 진행 보고는 터미널로 (2026-07-28 실사고)**: 프로젝트 감독이 지시 수행 중 멈춰야 할 판단(파일 처리·소유 불명·범위 이탈)이 생기면 터미널 출력에만 남기지 말고 **외부 감독 명패로 ask 또는 decision_gate 편지를 보낸다** — 터미널 출력은 아무도 깨우지 않아 조용한 대기가 된다(실사고: 정리 중단 질문이 터미널에만 남아 kyle 육안 발견까지 침묵). 비차단 진행 상황은 기존대로 터미널 보고.
+  - **진행 가시성을 감독을 깨워서 사지 마라 (2026-08-10 실사고 — 2026-07-27의 재발)**: 이 항목은 새 사고가 아니라 **재발**이다. 2026-07-27에 같은 실패(감시 스크립트 종료를 기다려 판 정체)를 박제하면서 "감독 임명장 표준 문구에도 같은 줄 포함"이라고 적었는데, **임명장 표준 문구 파일이 존재하지 않았다.** 임명장은 매번 손으로 썼고, 살아 있는 임명장 2장 어디에도 그 줄이 없었다(2026-08-10 실측). 규칙이 기록에는 남고 감독에게는 안 닿은 것이다. → 그래서 `references/appointment-template.md`를 만들었다. **임명장을 발부하기 전에 그 파일의 8개 항목이 문장으로 들어갔는지 센다.** 참조 링크만 거는 것은 통과가 아니다 — 그게 2026-07-27 박제가 실패한 방식이다. kyle이 "판이 뭘 하는지 안 보인다"고 하자 슈퍼감독이 프로젝트 감독에게 "각 단계가 끝날 때마다 터미널 한 줄로 남겨라 — kyle이 그 줄로 진행을 본다"고 지시했다. 감독은 이를 **깨어서 경과를 중계하라**로 받아, `watch-card.sh`를 직접 들고 foreground 대기하며 "5분째 / 7분째 / 8분째"를 출력했다. 반환될 때마다 감독 턴이 하나씩 탄다. 중계기도 companion도 멀쩡히 살아 있는 상태였다.
+    - **원인은 감독이 아니라 지시문이다.** "kyle이 그 줄로 본다"는 표현이 감독에게 상시 가시성 책임을 지웠다.
+    - **판 상태 확인**: 먼저 `curl -s http://127.0.0.1:8787/status.txt`를 쓴다. 웹 관제 서버가 응답하지 않을 때만 `scripts/board-status.py`로 폴백한다. `board-status.py`는 삭제하지 않는다. 웹 관제가 재사용하는 수집 라이브러리이자 서버 장애 때의 폴백이다. 수집 기준을 고칠 때는 이 파일만 고친다 (기준이 갈라지면 같은 판을 두 화면이 다르게 말한다 — 2026-08-10 Context 교대 문구가 실제로 한 번 갈라졌다).
+    - **웹 관제**: `scripts/board-dashboard.py` (기본 http://localhost:8787, 상시용은 아무 터미널에서 실행) — kyle의 기본 관제 화면이다 (2026-08-10 kyle: "웹이 더 편하다"). 사이드바(개요·우편함·터미널·원장 DB·판별 페이지), 카드 사양·결과 펼치기, 편지 보낸이→받는이 이름 풀기, 원장(orchestration.db) 읽기 전용 표 보기까지 담는다. 같은 날 오전의 "웹 대시보드를 안 만든다" 결정은 이걸로 대체됐다 — 당시 우려(서버가 죽으면 화면이 옛 값을 조용히 보여준다)는 화면 상단에 수집 시각을 항상 표시하고, 서버 응답이 없으면 "서버 응답 없음"을 명시하는 것으로 해소했다. 낡은 값이 정상처럼 보이는 경로는 없다.
+    - **읽을 수 없으면 '모름'으로 적는다**: 위 스크립트는 `task-list` 실패를 "카드 0개"가 아니라 "못 읽음(0개가 아니라 모름)"으로 낸다. 감시 화면이 실패를 정상으로 보이게 하면 감시가 없는 것만 못하다.
+    - **규칙**: 사람의 진행 가시성은 **감독이 아닌 곳**에서 얻는다 — 중계기 일기(`.orca/relay-logs/<판이름>.relay-log.md`)의 갱신, 카드 상태(`task-list`), 터미널 미리보기. 감독에게 요구하는 터미널 한 줄은 **카드가 끝났을 때의 결과 한 줄**이지 경과 중계가 아니다. 지시문에 "kyle이 이걸로 진행을 본다" 같은 문장을 넣지 않는다.
+    - **감독의 대기 방식**: 발령 뒤에는 턴을 끝내고 잔다. `watch-card.sh`는 `run_in_background`로 띄우고 **대기하지 않는다**(전부 종결되면 스스로 끝나며 깨운다). watch-card·watch-terminals 실행과 "정상이네" 판정은 중계기 몫이다(§중계기). 감독이 그것을 직접 드는 것은 중계기가 죽었을 때의 임시 조치이며, 그때도 첫 행동은 **중계기 재가동**이다.
   - **외부 감독 프로그램이 있어도 보고 주소는 프로젝트 감독 handle로 둔다.** worker_done·escalation·decision_gate는 프로젝트 감독이 먼저 처리하고, 외부 감독에는 전체 완료·치명 오류·반복 실패·프로젝트 간 충돌·kyle 결정 관문만 올린다. 외부 감독은 판 인계 후 단독 작성자 권한을 침범하지 않는다.
   - **실제 기상 연결**: companion은 새 중요 신호마다 현재 `project-supervisor` role을 resolve해 얻은 handle에 `ORCA_INBOX_WAKE` 텍스트를 보내고 Enter를 별도 전송한다. 외부 프로그램을 깨우는 방식은 하네스별 어댑터가 companion의 `SIGNAL` stdout을 소비한다. 신호 출력만 존재하는 상태를 end-to-end 기상 성공으로 간주하지 않는다.
   - **구형 lifecycle 보고 실패 복구 (`[LEGACY READ-ONLY]`, 2026-07-31)**: 같은 lifecycle 명령을 무작정 재시도하거나 현재 명령으로 번역하지 않는다. relay/worker는 구조화된 보고만 남기고, companion은 mailbox의 구조화 편지만 대조한다. Delivery ack·text+Enter 실패는 fail-closed로 재생하고, 그 밖의 관찰 실패는 warning+continue로 남긴다. companion과 relay는 Run을 자동 인수하거나 카드·Dispatch 상태를 바꾸지 않는다.
@@ -123,18 +169,34 @@ print(json.load(urllib.request.urlopen(r,timeout=10))['usage'])"
 - 리허설/실험 worktree 정리는 kyle 승인 후: `terminal stop` → `worktree rm --force`(개별 실행, 절대경로 id) → `orchestration reset --all`(그 판의 카드만 있을 때).
 - 산출물이 필요한 worktree는 정리 전에 백업 경로를 보고한다.
 - **명패·감독 주소 보존**: 판이 살아 있는 동안 명패와 프로젝트 감독 터미널을 중간 정리 대상으로 삼지 않는다. 유휴 작업자·검수자는 감시 목록에서 빼되, 명패·프로젝트 감독·중계기는 판 종료 인계가 끝날 때까지 보존한다. `terminal stop --worktree`처럼 같은 worktree의 모든 터미널을 닫는 넓은 종료는 금지하고, 이번 판에서 만든 정확한 handle·PID만 종료한다.
-- **중계기 카드 수명**: relay 초기화가 끝났다는 이유로 카드를 completed로 닫지 않는다. 판이 살아 있는 동안 relay 카드는 dispatched/monitoring 의미로 유지하고, 판 종료 시 companion·중계기 종료와 잔여 자식 확인까지 끝난 뒤 completed 처리한다. 카드 상태와 실제 프로세스 수명이 다르면 오류로 기록한다.
+- **중계기 카드 수명**: relay 초기화가 끝났다는 이유로 카드를 completed로 닫지 않는다. 판이 살아 있는 동안 relay 카드는 dispatched/monitoring 의미로 유지하고, 판 종료 시 companion·중계기 종료와 잔여 자식 확인까지 끝난 뒤 completed 처리한다. 카드 상태와 실제 프로세스 수명이 다르면 오류로 기록한다. **교대할 때는 카드를 새로 만들지 말고 발령만 옮긴다 — "카드는 하나, 발령만 교체".** 실사고 2026-08-10(다른 세션 발견, 슈퍼감독 실측 확인): 중계기 교대로 새 터미널을 세우면서 `assignee_handle` 을 안 옮겨, 카드는 죽은 `term_a36b4fa3…`(terminal_handle_stale) 을 가리키는데 실제 relay 는 `term_a1b3c293…` 에서 live 로 일기를 쓰고 있었다. **중계기가 살아서 일기를 갱신하고 있어도 장부는 틀릴 수 있다** — 일기 mtime 만 보고 정상으로 판정하지 않는다. 교대 절차에 대조 한 줄을 고정한다: 교대 직후 `roster resolve --role relay` 의 `currentHandle` 과 카드의 `assignee_handle` 이 같은지 확인한다. 같은 카드 재dispatch 는 active dispatch 로 거부되므로 `--retry-request` 또는 `task-update --status ready` 로 발령을 푼 뒤 다시 dispatch 한다.
 
 - **codex 일꾼 잔여 프로세스 정리 (2026-07-23 메모리 폭주 사고 박제)**: codex는 살아 있는 동안 MCP 자식을 중복 재생성하고 옛 세트를 방치하는 버그가 있다(한 부모에 92개 실측). 정상 종료 시엔 자식이 같이 죽지만(실측), 일꾼 터미널을 강제 종료·방치하면 자식이 남는다. (1) 발령 명령에 역할별 경량 프로필(기본 `-p orca-worker`)이 있으면 자식이 역할에 필요한 1~2개로 제한되므로 이게 1차 방어다(roster.md 역할별 프로필 표). (2) headless `codex exec`를 직접 띄운 경우 wrapper PID를 기록해 두고, 작업 종결 시 살아 있으면 그 PID 하나에 TERM을 보낸다(자식은 부모 종료 시 동반 종료 — 실측). (3) 판 종료 시 `ps`로 자기 판 일꾼의 잔여 자식(lsp-daemon·codegraph·server.mjs·playwright·context7)을 읽기 전용으로 확인하고, 남아 있으면 kyle에게 목록 보고 후 승인받아 정리한다 — 다른 판·다른 세션의 프로세스는 절대 건드리지 않는다.
 
 - **감시의 생존 관리 (2026-07-23 실사고 박제)**: 감시 프로세스도 죽는다. (1) 재가동 반사 — 감시 작업의 실패/종료 알림을 받으면 내용 분석보다 **재가동을 먼저** 한다 (원인 무관, 판이 살아 있는 한 감시 공백 금지). (2) 세션 복귀 시 감시 3종(watch-card·watch-inbox·watch-terminals) 생존을 점검하고 죽은 것을 재가동한다.
 
+- **중계기 헤드리스 검증 완료 — DeepSeek (2026-08-10)**: 2026-08-07~08 판에서 DeepSeek 중계기 교체가 **승인 창 때문에 두 번 실패**해 Luna로 복귀했고, 그때 "DeepSeek 자체 실패로 기록하지 말고 저비용 중계기는 헤드리스 1회 호출 구조로 따로 검증한다"는 후속을 남겼다(rally-log 2026-08-07~08). **그 검증을 2026-08-10에 실행했고 통과했다.**
+  - 명령: `command-code -p '<판정 질문>' --model deepseek/deepseek-v4-flash --yolo --no-session`
+  - 실측: 정체/정상 판정 질문 1건에 **6.075초**, 정답, **승인 창 없음**. 예전 실패 원인이던 승인 창은 `--yolo`(권한 프롬프트 우회) + `-t`(프로젝트 자동 신뢰)로 사라진다.
+  - `command-code --list-models` 기준 DeepSeek 은 `deepseek/deepseek-v4-flash`(기본)와 `deepseek/deepseek-v4-pro` 둘이다. **opencodex 프록시에는 DeepSeek 이 없다**(13종 중 0) — codex 경유로는 못 쓴다.
+  - **구조가 달라진다**: 지금 중계기는 Orca 터미널에 상주시키고 kicker가 5분마다 찔러 깨우는 구조인데(LLM 에이전트가 상주 턴을 못 버티기 때문 — 2026-07-23 실측), 헤드리스 1회 호출이면 **터미널도 kicker도 필요 없다.** 셸 루프가 순찰(커서 읽기·일기 append)을 하고, **판단이 필요한 지점에서만** 모델을 1회 부른다.
+  - **아직 안 한 것**: 실제 교체. 중계기는 판정만 하는 게 아니라 watch-card/watch-terminals 실행·일기 기록·편지 발송·프록시 자가 복구까지 맡는다. 판정만 떼어 헤드리스로 옮기는 것이 첫 단계이며, 살아 있는 판에 적용하기 전에 한 판에서 먼저 시험한다.
 - **감시 중계기(relay) — luna-low (2026-07-23 kyle 설계)**: 감시 신호를 지휘자(비싼 모델)가 전부 직접 받으면 기상 횟수가 곧 토큰이다. 중계기 luna-low 터미널 1개가 감시를 대신 받아 "중요한가?"를 판정하고, 중요한 것만 지휘자 명패로 전달한다. (1) 편성 기준: **예외 없이 항상 — 판 세팅 표준 절차에 포함** (kyle 2026-07-23 확정: 1장짜리 판은 드물고, 판은 1장으로 시작해 커지는 게 보통이라 예외 조항 자체를 없앰. 실례: qa-allinone 4장→8장+). 명패·watch-inbox와 같은 스텝에서 중계기 터미널을 함께 띄운다. **중계기 편성 명령 (kyle 2026-07-23 — 최경량 프로필)**: `codex -p orca-lean --model gpt-5.6-luna -c model_reasoning_effort="low" --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust` — 중계기는 코딩을 안 하므로(셸 스크립트 실행·orca 명령·편지 발송뿐) LSP·OMO 플러그인 전부 불필요, 자식 프로세스 0개인 orca-lean이 정확히 맞는다. (2) 중계기 몫: watch-card/watch-terminals 실행·시한 만료 재가동·감시 목록 갱신·진행 확인("정상이네" 판정)·순찰 겸임(위 순찰 절의 luna와 같은 터미널 1개 — 별도 편성 아님). **(2.1) 상주 턴은 성립하지 않는다 (2026-07-23 실측, kyle 발견)**: '판 종료까지 반복하라'고 지시해도 LLM 에이전트는 각 처리 후 턴을 끝내고 잠든다 — 백그라운드 감시가 신호를 내도 처리할 두뇌가 없다. 표준 구조는 **알람 kicker**: 지휘자가 토큰 0짜리 셸 루프(5분 주기, run_in_background)로 중계기 터미널에 '[순찰 알람] ...' 텍스트+엔터를 보내고, 중계기는 알람마다 짧은 턴 1개로 순찰·기록·(이상 시) 보고 후 다시 잠든다. kicker가 죽으면 순찰 공백이므로 지휘자 1시간 기상 때 kicker 생존도 함께 점검한다. **프록시 자가 복구 포함 (2026-07-23 kyle 승인)**: ERROR 신호가 프록시 계열(`stream disconnected`·127.0.0.1:10100 연결 오류)이면 중계기가 직접 `ocx ensure`(미복구 시 `ocx status`→`ocx start`)로 프록시를 살리고, 멈춘 일꾼에게 "이어서 진행" 재개 지시까지 한 뒤 지휘자에게는 무보고. 복구 실패 시에만 지휘자 명패로 전달. (실사고 2회: 2026-07-23 프록시 사망으로 kimi/glm 일꾼 일괄 정지 — kyle 수동 복구) (3) 지휘자 몫으로만 전달: worker_done·escalation·decision_gate·오류 검출·정체 판정. **(3.1) 랠리 파이프라인 공백 감지 (2026-07-27 실사고 박제)**: 순찰 때 자기 판의 랠리별 마지막 카드 상태를 확인해, **구현/수정 카드가 completed인데 후속 검수 카드가 15분(순찰 3회) 이상 만들어지지 않으면** 그 랠리를 공백으로 보고 감독 명패로 escalation 1회 보낸다 (제목: `pipeline_gap:<이슈/랠리>`). 이 유형은 오류도 정체도 아니어서 기존 감시 전부의 사각지대다 (실사고: #79 4R 구현 완료 후 재검수 미발령 — kyle 육안 발견). 오탐 억제: 결정 관문 대기·배치 대기·동시 실행 상한 조절 등 감독이 "의도된 대기"라고 답한 랠리는 상태가 바뀔 때까지 다시 보고하지 않는다. 같은 랠리 같은 공백의 반복 escalation 금지. (3.4) **heartbeat 편지 금지 (2026-07-23 kyle 지시)**: 중계기는 '정상·생존' 신호를 지휘자 명패로 보내지 않는다 — 생존 증명은 통신기록 파일의 갱신 시각(mtime)이며, 지휘자는 1시간 기상 때 mtime으로 중계기 생존을 판정한다. 명패 발신은 이상(정체·미복구 오류·판단 필요)뿐. (3.45) **토큰 소모 기록 (2026-07-23 kyle 지시)**: 순찰 때 각 터미널 상태바의 모델명·Context %·weekly % left를 통신기록 줄에 함께 적는다 — 판 종료 후 모델 효율 분석(rally-log)의 원자료. (3.5) **통신기록 의무 (2026-07-23 kyle 지시)**: 중계기는 자기가 수신한 모든 신호·판정·조치를 **대상 레포 본체의 `<레포루트>/.orca/relay-logs/<판이름>.relay-log.md`**에 append-only로 남긴다(한 줄: 시각|신호|판정|조치 — **시각은 `date "+%Y-%m-%d %H:%M:%S %z"` 형식 고정**, 2026-07-28 실사고: 자정 전환 후 89건이 시·분 없이 기록돼 시간 분석 불능). 다중 레포 오케스트레이션이라 로그는 해당 레포에 붙인다(2026-07-23 kyle 결정). 주의 2가지: (1) 판 워크트리가 아니라 **레포 본체 경로**에 쓴다 — 워크트리는 판 종료 시 삭제됨 (2) 그 레포 .gitignore에 `.orca/`가 없으면 판 세팅 때 추가한다. /tmp 금지(재부팅 소실) — 중계기 카드 spec에 이 의무를 항상 포함한다. (4) 지휘자는 자기 명패 watch-inbox 1개만 유지하되 **반드시 `WATCH_TYPES=worker_done,escalation,decision_gate`로 띄운다** — watch-inbox 기본값은 worker_done 제외(watch-card 몫이라는 구 설계)인데, 중계기 체제에선 지휘자가 watch-card를 안 들므로 기본값 그대로 쓰면 완료 신호를 영영 못 받는다 (2026-07-23 실사고: 카드M worker_done 도착에 지휘자 미기상, kyle 발견). 그리고, 그 시한 만료(1시간 1회)를 중계기 생존 점검 겸용으로 쓴다(중계기 사망 = 감시 공백이므로 이 보험 기상은 수용). (5) 지휘자 기상 절약 3칙 (kyle 2026-07-23 — **중계기 없는 판에서만 적용**): 진행 확인 타이머는 본 작업이 먼저 끝나면 TaskStop으로 취소(유령 알림 방지) / 확인류는 다음 실제 작업 턴에 얹어 처리(타이머 남발 금지) / 마지막 1~2건 국면에서는 완료 알림 외에 아무것도 안 건다. **중계기가 있는 판에서는 이 3칙이 불필요하다** — 감시가 깨우는 대상이 luna라 비용 전제가 사라지므로, 막판에도 감시를 줄이지 않고 풀 커버리지(오류·정체 감시 포함)를 유지하는 것이 기본이고, 타이머 정리·얹어가기는 중계기의 내부 위생 규칙로 내려간다 (kyle 2026-07-23 확인).
 
   - **중계기 강도 최신 우선 규칙 (2026-07-31 kyle)**: 이 절 앞부분의 `luna-low` 명령은 2026-07-23 당시 기록으로만 남긴다. 새 판의 실제 중계기·순찰 기본값은 `codex -p orca-lean --model gpt-5.6-luna -c model_reasoning_effort="high" --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust`다. 같은 신호를 두 번 확인해도 판단이 불확실할 때만 세션 안에서 xhigh로 임시 승급하고, 정상 순찰에는 xhigh를 쓰지 않는다.
   - **중계기 중복 금지·신호 누락 복구 (2026-07-24 실사고)**: 정상 `worker_done`은 작업자·검수자→프로젝트 감독의 직접 우편이 원본이므로 relay가 같은 완료를 `worker_done`으로 다시 보내지 않는다. 감독의 감시 대상 갱신 `status`는 읽고 relay log만 갱신하며 “확인했습니다” 답장을 보내지 않는다. 카드가 completed인데 직접 worker_done이 없으면 60초 유예 후 전역 inbox에서 같은 taskId+dispatchId 직접 신호를 다시 확인한다. 그래도 없을 때만 `escalation` 제목 `worker_done_missing:<taskId>`로 한 번 보고한다. 정상 완료 복제, status 답장, 같은 누락 escalation 반복은 금지한다.
   - **중계기 교대(handover) 계약 (2026-08-04 교대 실패 박제 — SKILL.md 안전 규칙 8의 상세)**:
     - **언제 교대하나 — 셋뿐이다.** (1) 판단 품질 저하 (2) 판 경계 (3) context **80% 초과**. 그 전에는 **압축이 기본**이다. 예전 "Context 50%에서 교대" 기록은 남겨 두되 현재 기준이 아니다 — 교대 자체가 감시 공백 위험을 만드는 작업이라, 압축으로 버틸 수 있으면 교대하지 않는 쪽이 싸다.
+    - **교대 기준은 모델 계열마다 다르다 (2026-08-10 kyle 결정)**: 이 예외는 **gpt 계열만** 해당한다.
+
+      | 계열 | 상주 역할에서 | 80% 도달 시 |
+      |---|---|---|
+      | gpt (codex: sol·luna·terra) | 자동 압축이 잘 돈다 | **교대하지 않는다.** 압축에 맡긴다 |
+      | 그 외 (claude opus·fable, zai glm, kimi k3) | 자동 압축을 기대하지 않는다 | **교대한다.** 80% 부근에서 인수인계를 준비한다 |
+
+      gpt 계열에서 교대를 제안할 근거는 **(a) 판단 품질 저하가 실제로 보일 때 (b) 판 경계 (c) 80%를 넘긴 뒤에도 압축이 안 일어나 Context가 계속 오를 때** 셋뿐이다. **한 번 읽은 80%는 근거가 아니다** — 서로 다른 시점의 관측 2회에서 계속 오르는 것을 확인한 뒤에 올린다(2026-08-10: 슈퍼감독이 한 번 읽은 80%로 교대를 올렸다가 취소).
+
+      비-gpt 계열을 감독·중계기 같은 **상주 역할**에 앉힐 때는 이 차이를 편성 단계에서 미리 계산한다 — 판이 길면 교대가 반드시 한 번 들어간다.
     - **순서는 고정이다.** `후임 생성 → 공식 roster 등록 확인 → 기동 확인 → 실제 순찰 1회 확인 → 그다음 선임 정지`. 등록 확인은 `roster list`/`roster show`에 후임이 실제로 나오는 것이고, 순찰 확인은 후임이 relay 로그에 자기 판정 줄을 1회 append 한 것이다. **화면에 CLI가 떴다는 것은 어느 단계의 증거도 아니다.**
     - **후임 없이 선임 종료 금지.** 위 단계 중 하나라도 확인되지 않으면 교대를 실패로 기록하고 선임을 그대로 유지한다. 실패를 "일단 후임이 떴으니 됐다"로 반올림하지 않는다 (실사고 2026-08-04: 후임 생성·화면 시작은 확인됐지만 roster 미등록·`RELAY_SUCCESSOR_READY` 부재 상태에서 교대로 판정될 뻔했다).
     - **인계는 무상태다.** 넘기는 것은 `cursor` + append-only relay 로그 경로 + `project`/`board`/`run`/`super-run` 뿐이다. 선임의 대화 문맥, 판단 이력, 요약 브리핑을 넘기지 않는다 — 후임은 로그와 cursor에서 스스로 상태를 복원해야 하고, 그래야 선임의 오판이 그대로 상속되지 않는다.

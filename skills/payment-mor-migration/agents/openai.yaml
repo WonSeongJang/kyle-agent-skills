@@ -1,0 +1,4 @@
+interface:
+  display_name: "Payment MoR Migration"
+  short_description: "기존 결제 모듈을 Polar/Lemon으로 안전 전환"
+  default_prompt: "Use $payment-mor-migration to migrate an existing payment module to Polar or Lemon Squeezy with safe cutover and rollback."

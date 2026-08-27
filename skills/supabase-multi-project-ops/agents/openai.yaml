@@ -1,0 +1,7 @@
+interface:
+  display_name: "Supabase Ops"
+  short_description: "Operate Kyle's multi-project Supabase setup"
+  default_prompt: "Use $supabase-multi-project-ops to choose the right Supabase account and project secrets, then run the correct CLI or DB operation."
+
+policy:
+  allow_implicit_invocation: true

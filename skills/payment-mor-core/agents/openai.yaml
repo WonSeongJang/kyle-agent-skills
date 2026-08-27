@@ -1,0 +1,4 @@
+interface:
+  display_name: "Payment MoR Core"
+  short_description: "Polar/Lemon MoR 결제 구축과 운영 워크플로우"
+  default_prompt: "Use $payment-mor-core to design and implement a provider-agnostic MoR checkout, webhook, and ledger flow with Polar and Lemon Squeezy."

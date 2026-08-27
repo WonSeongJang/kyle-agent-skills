@@ -1,0 +1,59 @@
+project_root: .
+tasks_dir: workflow/tasks
+
+agents:
+  kimi:
+    cmd: kimi
+    flags:
+      - --quiet
+      - --yolo
+      - -p
+  claude:
+    cmd: claude
+    flags:
+      - --print
+      - --dangerously-skip-permissions
+      - --chrome
+      - -p
+  codex:
+    cmd: codex
+    flags:
+      - exec
+      - --dangerously-bypass-approvals-and-sandbox
+
+daily:
+  enabled: true
+  dir: docs/daily
+  auto_bootstrap: true
+  tools:
+    - codex
+    - claude
+    - kimi
+    - opencode
+
+guides:
+  priority:
+    - AGENTS.md
+    - CLAUDE.md
+    - WORKFLOW.md
+
+branch:
+  base_branch: main
+  fallback_branches:
+    - dev
+  prefix: task/
+  merge_mode: no-ff
+  delete_branch_after_merge: true
+  delete_worktree_after_merge: true
+
+review:
+  verdict_order:
+    - APPROVE
+    - REJECT
+    - HUMAN
+  default_verdict: HUMAN
+
+conflicts:
+  combine_patterns:
+    - docs/daily/**/*.md
+    - workflow/tasks/**/*.md

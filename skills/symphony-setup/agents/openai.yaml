@@ -1,0 +1,7 @@
+interface:
+  display_name: "Symphony Setup"
+  short_description: "Install or normalize repo-local Symphony"
+  default_prompt: "Use $symphony-setup to install or normalize Symphony for this repository."
+
+policy:
+  allow_implicit_invocation: true

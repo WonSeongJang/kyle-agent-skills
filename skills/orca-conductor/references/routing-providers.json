@@ -1,11 +1,28 @@
 {
+  "_scope": {
+    "확정일": "2026-08-10 (kyle)",
+    "이 파일이 정하는 것": "카드를 수행하는 역할의 모델·노력 편성",
+    "라우팅 대상": {
+      "developer": "구현",
+      "reviewer": "검수",
+      "researcher": "간단한 조사"
+    },
+    "라우팅 대상 아님 — 상시 결정(슈퍼 또는 kyle)": {
+      "project-supervisor": "감독. 판정 역할이므로 developer 계열에서 고르지 않는다. 품질 높은 판정 계열에서 낮은~중간 노력.",
+      "relay": "중계기. 상시 결정 3순위 (2026-08-11 kyle 확정): 1순위 헤드리스 relay-patrol.py + commandcode-deepseek4flash max (렌더러 부하 0, 2차 시험 8h 54판정 실측) / 2순위 pane 방식 deepseek4flash max / 3순위 pane 방식 luna high. low 폐지. 도는 중계기는 강제 교체 없이 다음 자연 교대부터.",
+      "companion": "셸 스크립트. 모델 자체가 없다.",
+      "kicker": "셸 스크립트. 모델 자체가 없다."
+    },
+    "왜 구분하나": "카드를 수행하는 역할만 라우터가 고른다. 판을 굴리는 장치는 라우터 밖이다. 2026-08-10 슈퍼가 이걸 헷갈려 중계기 편성을 kyle 결정으로 떠넘겼고, kyle 이 '중계기는 라우터와 무관'이라고 지적해 드러났다.",
+    "발령 규칙": "이 파일의 command 를 글자 그대로 쓴다. -p orca 와 --model 과 노력 셋 중 하나라도 빠지면 발령하지 않는다. 발령 후 ps 로 실제 명령줄에 -p orca 가 있는지 확인한다."
+  },
   "providers": [
     {
       "id": "kimi",
       "family": "kimi",
       "quotaKey": "kimi",
       "enabled": true,
-      "weeklyReservePercent": 10,
+      "weeklyReservePercent": 30,
       "models": [
         {
           "id": "kimi/k3[1m]",
@@ -16,7 +33,7 @@
           "taskClassPrior": {
             "research": 8
           },
-          "command": "codex -p orca-worker --model 'kimi/k3[1m]' -c model_reasoning_effort=\"low\""
+          "command": "codex -p orca --model 'kimi/k3[1m]' -c model_reasoning_effort=\"low\""
         },
         {
           "id": "kimi/k3[1m]",
@@ -33,7 +50,7 @@
             "openai",
             "anthropic"
           ],
-          "command": "codex -p orca-worker --model 'kimi/k3[1m]' -c model_reasoning_effort=\"max\""
+          "command": "codex -p orca --model 'kimi/k3[1m]' -c model_reasoning_effort=\"max\""
         },
         {
           "id": "kimi/k3[1m]",
@@ -42,7 +59,7 @@
           "quality": 20,
           "harness": "codex",
           "taskClassPrior": {},
-          "command": "codex -p orca-analyst --model 'kimi/k3[1m]' -c model_reasoning_effort=\"high\""
+          "command": "codex -p orca --model 'kimi/k3[1m]' -c model_reasoning_effort=\"high\""
         },
         {
           "id": "kimi/k3[1m]",
@@ -53,7 +70,7 @@
           "taskClassPrior": {},
           "experimental": true,
           "experimentSharePercent": 20,
-          "command": "codex -p orca-analyst --model 'kimi/k3[1m]' -c model_reasoning_effort=\"max\""
+          "command": "codex -p orca --model 'kimi/k3[1m]' -c model_reasoning_effort=\"max\""
         }
       ]
     },
@@ -76,8 +93,8 @@
             "architecture": 6,
             "docs_config": 4
           },
-          "command": "codex -p orca-worker --model zai/glm-5.2 -c model_reasoning_effort=\"medium\"",
-          "enabled": true
+          "command": "codex -p orca --model zai/glm-5.2 -c model_reasoning_effort=\"medium\"",
+          "note": "조사(읽기 전용) 기본 편성 (2026-08-11 kyle — 조사 기본을 Kimi low에서 이관, 1M 문맥 필요한 대규모 읽기만 kimi 유지)"
         },
         {
           "id": "zai/glm-5.2",
@@ -95,8 +112,7 @@
             "openai",
             "anthropic"
           ],
-          "command": "codex -p orca-worker --model zai/glm-5.2 -c model_reasoning_effort=\"max\"",
-          "enabled": true
+          "command": "codex -p orca --model zai/glm-5.2 -c model_reasoning_effort=\"max\""
         },
         {
           "id": "zai/glm-5.2",
@@ -105,8 +121,7 @@
           "quality": 72,
           "harness": "codex",
           "taskClassPrior": {},
-          "command": "codex -p orca-analyst --model zai/glm-5.2 -c model_reasoning_effort=\"high\"",
-          "enabled": true
+          "command": "codex -p orca --model zai/glm-5.2 -c model_reasoning_effort=\"high\""
         },
         {
           "id": "zai/glm-5.2",
@@ -117,8 +132,7 @@
           "taskClassPrior": {},
           "experimental": true,
           "experimentSharePercent": 20,
-          "command": "codex -p orca-analyst --model zai/glm-5.2 -c model_reasoning_effort=\"max\"",
-          "enabled": true
+          "command": "codex -p orca --model zai/glm-5.2 -c model_reasoning_effort=\"max\""
         }
       ]
     },
@@ -143,7 +157,7 @@
             "security": -5,
             "concurrency": -5
           },
-          "command": "codex -p orca-worker --model gpt-5.6-luna -c model_reasoning_effort=\"xhigh\""
+          "command": "codex -p orca --model gpt-5.6-luna -c model_reasoning_effort=\"xhigh\""
         },
         {
           "id": "gpt-5.6-luna",
@@ -165,21 +179,21 @@
             "openai",
             "anthropic"
           ],
-          "command": "codex -p orca-worker --model gpt-5.6-luna -c model_reasoning_effort=\"max\""
+          "command": "codex -p orca --model gpt-5.6-luna -c model_reasoning_effort=\"max\""
         },
         {
           "id": "gpt-5.6-terra",
           "role": "developer",
           "effort": "high",
           "quality": 86,
-          "enabled": false,
           "harness": "codex",
           "taskClassPrior": {
             "security": 4,
             "concurrency": 4,
             "bugfix": 3
           },
-          "command": "codex -p orca-worker --model gpt-5.6-terra -c model_reasoning_effort=\"high\""
+          "command": "codex -p orca --model gpt-5.6-terra -c model_reasoning_effort=\"high\"",
+          "note": "조사(읽기 전용) 후보로 재활성 (2026-08-11 kyle)"
         },
         {
           "id": "gpt-5.6-luna",
@@ -194,7 +208,7 @@
             "security": -6,
             "concurrency": -6
           },
-          "command": "codex -p orca-analyst --model gpt-5.6-luna -c model_reasoning_effort=\"max\""
+          "command": "codex -p orca --model gpt-5.6-luna -c model_reasoning_effort=\"max\""
         },
         {
           "id": "gpt-5.6-sol",
@@ -207,7 +221,7 @@
             "concurrency": 5,
             "architecture": 3
           },
-          "command": "codex -p orca-analyst --model gpt-5.6-sol -c model_reasoning_effort=\"medium\""
+          "command": "codex -p orca --model gpt-5.6-sol -c model_reasoning_effort=\"medium\""
         },
         {
           "id": "gpt-5.6-sol",
@@ -222,7 +236,7 @@
           },
           "experimental": true,
           "experimentSharePercent": 20,
-          "command": "codex -p orca-analyst --model gpt-5.6-sol -c model_reasoning_effort=\"high\""
+          "command": "codex -p orca --model gpt-5.6-sol -c model_reasoning_effort=\"high\""
         },
         {
           "id": "gpt-5.6-sol",
@@ -237,7 +251,7 @@
           },
           "experimental": true,
           "experimentSharePercent": 20,
-          "command": "codex -p orca-analyst --model gpt-5.6-sol -c model_reasoning_effort=\"xhigh\""
+          "command": "codex -p orca --model gpt-5.6-sol -c model_reasoning_effort=\"xhigh\""
         },
         {
           "id": "gpt-5.6-sol",
@@ -252,7 +266,139 @@
           },
           "experimental": true,
           "experimentSharePercent": 20,
-          "command": "codex -p orca-analyst --model gpt-5.6-sol -c model_reasoning_effort=\"max\""
+          "command": "codex -p orca --model gpt-5.6-sol -c model_reasoning_effort=\"max\""
+        },
+        {
+          "id": "gpt-5.6-luna",
+          "role": "developer",
+          "effort": "xhigh",
+          "quality": 84,
+          "taskClassPrior": {
+            "research": 7,
+            "docs_config": 7,
+            "qa": 6,
+            "targeted_implementation": 3,
+            "security": -5,
+            "concurrency": -5
+          },
+          "harness": "omo",
+          "command": "omo --model openai-codex/gpt-5.6-luna --thinking xhigh --no-recommended-models",
+          "note": "codex 가 막힐 때 쓰는 같은 모델의 다른 실행기. --no-recommended-models 는 필수(없으면 kimi-k3 로 갈아탐). 검증은 --mode json 의 message.provider/model. 상세: conductor/references/agent-runners.json"
+        },
+        {
+          "id": "gpt-5.6-luna",
+          "role": "developer",
+          "effort": "max",
+          "quality": 86,
+          "taskClassPrior": {
+            "research": 8,
+            "docs_config": 8,
+            "qa": 7,
+            "targeted_implementation": 4,
+            "security": -6,
+            "concurrency": -6
+          },
+          "experimental": true,
+          "experimentSharePercent": 10,
+          "reviewerFamilyAllowlist": [
+            "openai",
+            "anthropic"
+          ],
+          "harness": "omo",
+          "command": "omo --model openai-codex/gpt-5.6-luna --thinking max --no-recommended-models",
+          "note": "codex 가 막힐 때 쓰는 같은 모델의 다른 실행기. --no-recommended-models 는 필수(없으면 kimi-k3 로 갈아탐). 검증은 --mode json 의 message.provider/model. 상세: conductor/references/agent-runners.json"
+        },
+        {
+          "id": "gpt-5.6-terra",
+          "role": "developer",
+          "effort": "high",
+          "quality": 86,
+          "taskClassPrior": {
+            "security": 4,
+            "concurrency": 4,
+            "bugfix": 3
+          },
+          "harness": "omo",
+          "command": "omo --model openai-codex/gpt-5.6-terra --thinking high --no-recommended-models",
+          "note": "codex 가 막힐 때 쓰는 같은 모델의 다른 실행기. --no-recommended-models 는 필수(없으면 kimi-k3 로 갈아탐). 검증은 --mode json 의 message.provider/model. 상세: conductor/references/agent-runners.json | 조사(읽기 전용) 후보로 재활성 (2026-08-11 kyle)"
+        },
+        {
+          "id": "gpt-5.6-luna",
+          "role": "reviewer",
+          "effort": "max",
+          "quality": 96,
+          "taskClassPrior": {
+            "research": 4,
+            "docs_config": 4,
+            "qa": 3,
+            "security": -6,
+            "concurrency": -6
+          },
+          "harness": "omo",
+          "command": "omo --model openai-codex/gpt-5.6-luna --thinking max --no-recommended-models",
+          "note": "codex 가 막힐 때 쓰는 같은 모델의 다른 실행기. --no-recommended-models 는 필수(없으면 kimi-k3 로 갈아탐). 검증은 --mode json 의 message.provider/model. 상세: conductor/references/agent-runners.json"
+        },
+        {
+          "id": "gpt-5.6-sol",
+          "role": "reviewer",
+          "effort": "medium",
+          "quality": 98,
+          "taskClassPrior": {
+            "security": 5,
+            "concurrency": 5,
+            "architecture": 3
+          },
+          "harness": "omo",
+          "command": "omo --model openai-codex/gpt-5.6-sol --thinking medium --no-recommended-models",
+          "note": "codex 가 막힐 때 쓰는 같은 모델의 다른 실행기. --no-recommended-models 는 필수(없으면 kimi-k3 로 갈아탐). 검증은 --mode json 의 message.provider/model. 상세: conductor/references/agent-runners.json"
+        },
+        {
+          "id": "gpt-5.6-sol",
+          "role": "reviewer",
+          "effort": "high",
+          "quality": 99,
+          "taskClassPrior": {
+            "security": 5,
+            "concurrency": 5,
+            "architecture": 3
+          },
+          "experimental": true,
+          "experimentSharePercent": 20,
+          "harness": "omo",
+          "command": "omo --model openai-codex/gpt-5.6-sol --thinking high --no-recommended-models",
+          "note": "codex 가 막힐 때 쓰는 같은 모델의 다른 실행기. --no-recommended-models 는 필수(없으면 kimi-k3 로 갈아탐). 검증은 --mode json 의 message.provider/model. 상세: conductor/references/agent-runners.json"
+        },
+        {
+          "id": "gpt-5.6-sol",
+          "role": "reviewer",
+          "effort": "xhigh",
+          "quality": 99.3,
+          "taskClassPrior": {
+            "security": 5,
+            "concurrency": 5,
+            "architecture": 3
+          },
+          "experimental": true,
+          "experimentSharePercent": 20,
+          "harness": "omo",
+          "command": "omo --model openai-codex/gpt-5.6-sol --thinking xhigh --no-recommended-models",
+          "note": "codex 가 막힐 때 쓰는 같은 모델의 다른 실행기. --no-recommended-models 는 필수(없으면 kimi-k3 로 갈아탐). 검증은 --mode json 의 message.provider/model. 상세: conductor/references/agent-runners.json"
+        },
+        {
+          "id": "gpt-5.6-sol",
+          "role": "reviewer",
+          "effort": "max",
+          "quality": 99.6,
+          "taskClassPrior": {
+            "security": 5,
+            "concurrency": 5,
+            "architecture": 3
+          },
+          "experimental": true,
+          "experimentSharePercent": 20,
+          "harness": "omo",
+          "command": "omo --model openai-codex/gpt-5.6-sol --thinking max --no-recommended-models",
+          "note": "codex 가 막힐 때 쓰는 같은 모델의 다른 실행기. --no-recommended-models 는 필수(없으면 kimi-k3 로 갈아탐). 검증은 --mode json 의 message.provider/model. 상세: conductor/references/agent-runners.json"
         }
       ]
     },
@@ -362,5 +508,49 @@
         }
       ]
     }
-  ]
+  ],
+  "_시험결과": {
+    "EXP-RI-1": {
+      "무엇을 쟀나": "검수자가 구현 문맥을 갖고 있느냐만 바꿔서 결함 발견 수를 셌다. 구현은 1회만 하고 같은 커밋을 세 번 검수했다.",
+      "date": "2026-08-10",
+      "조건": "팔A·팔B 동일 — 같은 커밋 cd47704, 같은 실행기 omo, 같은 모델 gpt-5.6-terra, 같은 노력 high. 심판만 gpt-5.6-sol medium + 새 워크트리.",
+      "결과": {
+        "팔A_문맥독립": {
+          "발견": 1,
+          "놓침": 1,
+          "오탐": 0,
+          "초": 314.1,
+          "서브에이전트": 0
+        },
+        "팔B_문맥공유": {
+          "발견": 0,
+          "놓침": 2,
+          "오탐": 0,
+          "초": 153.6,
+          "서브에이전트": 0
+        },
+        "심판_다른모델": {
+          "발견": 2,
+          "놓침": 0,
+          "오탐": 0,
+          "초": 597,
+          "서브에이전트": 5
+        },
+        "둘 다 놓친 것": 1
+      },
+      "결론": "독립 검수를 없앨 근거는 안 나왔고 유지할 근거는 나왔다. 자체 검수만 믿었으면 중요 결함 2개를 통과시켰다.",
+      "확정하지 않은 것": "한 표본이라 원인이 구현 문맥인지, 검수 시간 차이인지, 모델 실행의 우연인지 못 가른다. 표본이 쌓이면 다시 본다.",
+      "시간 기준선": "이 판 첫 기준선이다. 153.6초=0개 / 314.1초=1개 / 597초=2개. 앞으로 '몇 초면 빠른가'는 이 표와 견준다.",
+      "원본": "/Users/fw_m1/Dev/conductor-core/.staging/result-EXP-RI-1.md"
+    }
+  },
+  "_정책_20260811": {
+    "확정": "2026-08-11 kyle (하루 동안 순차 확정, 최종본)",
+    "구현": "zai/glm-5.2 기본 (가벼우면 medium, 무거우면 max). zai는 5시간 리셋뿐이라 주간 고갈 없음.",
+    "조사": "glm-5.2 medium 기본. luna max·terra high도 후보. kimi low는 후보 소진 시 폴백. glm도 1M 문맥(kyle 확인).",
+    "kimi": "보존 — 주간 예약선 30% (2026-08-10 실사고: 한 건에 95→99%).",
+    "검수": "기존 유지 (sol 계열 중심).",
+    "중계기": "중계기. 상시 결정 3순위 (2026-08-11 kyle 확정): 1순위 헤드리스 relay-patrol.py + commandcode-deepseek4flash max (렌더러 부하 0, 2차 시험 8h 54판정 실측) / 2순위 pane 방식 deepseek4flash max / 3순위 pane 방식 luna high. low 폐지. 도는 중계기는 강제 교체 없이 다음 자연 교대부터.",
+    "감독": "gpt-5.6-sol medium 기본. 러너 기본값 = omo (2026-08-12 kyle 승인 — 당분간 새 판 감독은 omo로 표본을 쌓고, 성적 원장의 codex 감독 대비 실측으로 표준 승격 여부 결정). codex 러너는 폴백. omo 스폰·특수 규칙은 roster.md 1층 omo-sol 행 (한 줄 주입만, 세션 파일 검증, --no-recommended-models 필수)."
+  }
 }

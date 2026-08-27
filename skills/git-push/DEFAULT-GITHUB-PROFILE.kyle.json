@@ -1,0 +1,15 @@
+{
+  "activeProfile": "company",
+  "profiles": {
+    "personal": {
+      "name": "ChickenBreast-ky",
+      "email": "cv271010@gmail.com",
+      "sshHost": "github-personal"
+    },
+    "company": {
+      "name": "SecureNetCo",
+      "email": "help@securenet.kr",
+      "sshHost": "github-company"
+    }
+  }
+}
