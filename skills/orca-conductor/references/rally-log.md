@@ -436,3 +436,12 @@
 - 검증: 기존 적용 중·정확 만료·malformed 경계 3개와 disabled/unavailable 경계 1개를 정식 uv 환경에서 직접 실행해 4 passed. 검수 전후 status·diff·대상 파일 해시가 같았다. 사유 원문은 오류와 선택 reason에 나오지 않았다.
 - 결말: 체크포인트 `30470ffb8868ab050577022cb96415906f0b498f`, 변경 3파일. FIX1 실제 작업 4분 31초, 최종 재검수 2분 7초. 결과 문서의 시험 증가량 `+44`는 실측 `+43`인 사소 오계수이며 제품에는 영향이 없다. push·merge·배포·작업트리 삭제는 하지 않았다.
 - 관찰: 강제 선택은 후보 필터만 추가하면 오류 원인을 잃는다. 강제를 적용하기 전에 대상의 존재·활성·요청 가용성을 따로 검사하고, 일반 후보 고갈과 구분되는 오류로 닫아야 운영자가 설정 문제를 바로 찾을 수 있다.
+
+### 2026-08-27 [판:rehearsal-1] 오케스트레이션 리허설 — calc subtract/multiply
+
+- 성격: 외부 셸(Claude Code) 지휘자의 첫 판 한 바퀴 실측(카드→발령→worker_done→검수→체크포인트) · LIGHT · 구현: GLM 5.2 max (ocx zai 첫 실전) · 검수: Sol xhigh(라우터 탐색 버킷).
+- 라운드: 1라운드 합격. 구현 1분 59초, 검수 약 2분. 검수 발견 치명·중요·사소 0.
+- 검증: 검수자가 `python3 -m unittest -v` 3 passed 직접 실행, `git diff --check` 0, 범위 밖 변경 없음. 지휘자 대조 `unittest -q` OK.
+- 결말: 체크포인트 `ddc5845` (rehearsal-1 브랜치, calc.py·test_calc.py). push 없음. 정리는 관문 대기.
+- 사고: (1) 지휘자가 검수 터미널 하단을 읽지 않고 "1"+Enter 를 보내 **Codex 업데이트 프롬프트의 "Update now" 를 눌렀다** — 전역 codex 0.147→0.150.1 자동 갱신, 검수 세션 셸로 사망, 새 검수 터미널로 재편성(mechanics.md 의 기존 경고 재발: 프롬프트는 반드시 읽고 분기). (2) `watch-card.sh` 가 `task-list` 를 `--from` 없이 호출해 외부 셸 지휘자에선 `no_active_sender_terminal` 로 카드를 못 읽음 — `ORCA_TERMINAL_HANDLE=<명패>` 를 환경에 넣고 띄우면 정상(수정 후보: 스크립트가 ORCA_TERMINAL_HANDLE/--from 을 명시 지원). (3) 구현 터미널 첫 기동은 폴더 신뢰 프롬프트에서 tui-idle 대기가 타임아웃 — 신뢰 응답 뒤 재발령으로 정상.
+- 관찰: 상주 companion·중계기·대시보드는 1장 판이라 생략(다음 판에서 실측 필요). GLM 5.2 + `-p orca` 는 ocx 경유로 문제없이 카드를 수행했다.
