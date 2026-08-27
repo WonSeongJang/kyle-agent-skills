@@ -61,7 +61,7 @@
       "id": "zai",
       "family": "zai",
       "quotaKey": "zai",
-      "enabled": false,
+      "enabled": true,
       "weeklyReservePercent": 5,
       "models": [
         {
@@ -77,7 +77,7 @@
             "docs_config": 4
           },
           "command": "codex -p orca-worker --model zai/glm-5.2 -c model_reasoning_effort=\"medium\"",
-          "enabled": false
+          "enabled": true
         },
         {
           "id": "zai/glm-5.2",
@@ -95,7 +95,8 @@
             "openai",
             "anthropic"
           ],
-          "command": "codex -p orca-worker --model zai/glm-5.2 -c model_reasoning_effort=\"max\""
+          "command": "codex -p orca-worker --model zai/glm-5.2 -c model_reasoning_effort=\"max\"",
+          "enabled": true
         },
         {
           "id": "zai/glm-5.2",
@@ -104,7 +105,8 @@
           "quality": 72,
           "harness": "codex",
           "taskClassPrior": {},
-          "command": "codex -p orca-analyst --model zai/glm-5.2 -c model_reasoning_effort=\"high\""
+          "command": "codex -p orca-analyst --model zai/glm-5.2 -c model_reasoning_effort=\"high\"",
+          "enabled": true
         },
         {
           "id": "zai/glm-5.2",
@@ -115,7 +117,8 @@
           "taskClassPrior": {},
           "experimental": true,
           "experimentSharePercent": 20,
-          "command": "codex -p orca-analyst --model zai/glm-5.2 -c model_reasoning_effort=\"max\""
+          "command": "codex -p orca-analyst --model zai/glm-5.2 -c model_reasoning_effort=\"max\"",
+          "enabled": true
         }
       ]
     },
